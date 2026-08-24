@@ -12,7 +12,7 @@
 非対応エラーを返す。
 
 本リポジトリは`haoheliu/versatile_audio_super_resolution`から分離した独立フォークで、
-通常インストール、CLI、ローカルGradio、Cog Predictorを同じ推論コアへ接続する。
+通常インストール、CLI、ローカルGradioを同じ推論コアへ接続する。
 
 ## 主要コンポーネント
 
@@ -25,11 +25,7 @@
 | `audiosr/lowpass.py` | 推論条件用の低域通過フィルタと出力長整列を行う。 |
 | `audiosr/latent_diffusion/` | Latent Diffusion、DDIM/PLMS sampler、VAE、HiFi-GAN、条件encoderを実装する。 |
 | `app.py` | Gradio UI、単一モデルcache、チャンネル別chunk batch、crossfade、UI用変換を担う。 |
-| `predict.py` | Cogの`setup`でモデルを1回構築し、`predict`でファイル入力からWAVを返す。 |
 | `tests/` | 大容量checkpointを使わず、公開契約、shape、境界、package設定を検証する。 |
-
-`inference.py`は補助的なstandalone実装として残っているが、READMEの標準CLIでも
-`cog.yaml`のPredictor入口でもない。
 
 ## 標準推論データフロー
 
@@ -52,7 +48,6 @@
   `super_resolution_batch`を呼ぶ。batchごと・チャンネルごとにseedを派生させる。
 - Gradioのcacheは1モデルだけを保持する。同名モデルの連続要求は再利用し、
   `basic` / `speech`を切り替えると旧モデルを解放して新しいモデルを構築する。
-- Cogは`Predictor.setup`でモデルを構築し、各`predict`ではそのインスタンスを再利用する。
 
 ## 重要な不変条件
 
@@ -97,11 +92,7 @@ batch sizeに比例してaccelerator memoryを使うため既定値は1である
 外し、学習用`get_audio_features`とRoBERTaはCLAP実行時まで遅延する。起動時の不要なHub依存と
 memory消費を避ける一方、最初の実モデル構築時にはAudioSR checkpoint取得が必要である。
 
-### 通常環境とCog環境を分離する
-
-通常環境はPython 3.10〜3.14と新しい依存rangeを使う。Cogは既存GPU imageとの互換性のため
-CUDA 11.7 / PyTorch 2.0系を固定している。両者は同じソースを実行するが、依存更新と
-セキュリティ評価は別々に行う。
+### 対応Pythonに応じてLibrosaを選択する
 
 通常環境のLibrosaは、Python 3.10 / 3.11では0.11系、Python 3.12以降では1系を環境マーカーで
 選択する。単一バージョン範囲よりmanifestは複雑になるが、対応Pythonの下限を維持しながら

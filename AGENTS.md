@@ -15,8 +15,6 @@
   配布名を変更するときは`setup.py`、READMEの導入手順、package metadataテストを同期する。
 - LibrosaはPython 3.10 / 3.11で0.11系、Python 3.12以降で1系を選ぶ環境マーカーを
   `requirements.txt`と`setup.py`で同期し、対応Python範囲全体を解決可能に保つ。
-- `cog.yaml`はCUDA 11.7 / PyTorch 2.0系の独立した固定環境である。通常環境の版を
-  機械的にコピーせず、Cog環境で互換性を検証した版だけを反映する。
 - 製品バージョンの正本は`setup.py`の`VERSION`。明示的なバージョン依頼時だけ更新し、
   READMEの現行版表記、CHANGELOG、メタデータテストを同期する。
 - lock fileは現在コミットしていない。新しいpackage managerやlock形式へ移行するときは、
@@ -42,8 +40,8 @@
 
 ## 変更時の確認範囲
 
-- パイプライン変更は`audiosr/pipeline.py`、`audiosr/utils.py`、公開export、CLI、Gradio、
-  Cogの呼び出し契約を確認する。
+- パイプライン変更は`audiosr/pipeline.py`、`audiosr/utils.py`、公開export、CLI、Gradioの
+  呼び出し契約を確認する。
 - 音声shape、chunk、seed、checkpoint、CLI引数を変更したら対応する`tests/`へ回帰テストを追加する。
 - 約6.18 GBの実checkpointは通常の単体テストでdownloadしない。モデル生成をmockし、
   特徴抽出・shape・trim・呼び出し引数は実コードで検証する。
@@ -65,9 +63,9 @@ Python・依存・パッケージ境界を変更した場合は、同じコマ�
 `--python 3.14`でも実行する。
 
 ```powershell
-uvx ruff check --select E9,F63,F7,F82 app.py predict.py setup.py audiosr tests
+uvx ruff check --select E9,F63,F7,F82 app.py setup.py audiosr tests
 uv run --isolated --no-project --python 3.14 python -m compileall -q `
-  app.py predict.py setup.py audiosr tests
+  app.py setup.py audiosr tests
 git diff --check
 ```
 
@@ -80,4 +78,3 @@ PyPI公開時は公開ファイルのSHA-256をローカル成果物と照合し
 
 - `MANIFEST.in`はREADME、CHANGELOG、LICENSE、可視化画像、example資料、モデル設定・語彙を含める。
 - `.github/dependabot.yml`はrootのpip ecosystemを毎週監視し、minor/patchをまとめる。
-- `cog.yaml`の実行入口は`predict.py:Predictor`。`inference.py`はCogの設定入口ではない。
