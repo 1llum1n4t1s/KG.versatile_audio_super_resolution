@@ -11,6 +11,8 @@
   固定したCUDA indexを通常の`requirements.txt`へ追加しない。
 - 通常環境の直接依存は`requirements.txt`と`setup.py`の`REQUIRED`を同期する。
   テスト依存は`setup.py`の`EXTRAS["test"]`が正本である。
+- PyPI配布名は`kagayoi-audiosr`、Python import名とCLI名は`audiosr`である。
+  配布名を変更するときは`setup.py`、READMEの導入手順、package metadataテストを同期する。
 - LibrosaはPython 3.10 / 3.11で0.11系、Python 3.12以降で1系を選ぶ環境マーカーを
   `requirements.txt`と`setup.py`で同期し、対応Python範囲全体を解決可能に保つ。
 - `cog.yaml`はCUDA 11.7 / PyTorch 2.0系の独立した固定環境である。通常環境の版を
@@ -71,7 +73,8 @@ git diff --check
 
 配布物またはmanifestを変更した場合は、wheelとsdistを一時ディレクトリへ生成し、
 `twine check`、wheelの新規環境インストール、`audiosr --help`、sdistの必須ファイルを確認する。
-生成された`build/`、`dist/`、`audiosr.egg-info/`はコミットしない。
+PyPI公開時は公開ファイルのSHA-256をローカル成果物と照合し、PyPIから新規インストールする。
+生成された`build/`、`dist/`、`*.egg-info/`はコミットしない。
 
 ## 配布ファイル
 

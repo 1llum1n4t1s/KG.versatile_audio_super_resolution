@@ -7,6 +7,10 @@
 扱う。失われた原音の厳密な復元、packet loss修復、低周波ノイズ除去、DirectML実行は
 システムの契約に含まれない。
 
+この配布物は推論用途を対象とし、ToyDataset、WebDataset学習backend、phonemeの数値展開は
+同梱しない。これらを選択した経路は、欠落シンボルによる偶発的な失敗ではなく、明示的な
+非対応エラーを返す。
+
 本リポジトリは`haoheliu/versatile_audio_super_resolution`から分離した独立フォークで、
 通常インストール、CLI、ローカルGradio、Cog Predictorを同じ推論コアへ接続する。
 
@@ -102,6 +106,12 @@ CUDA 11.7 / PyTorch 2.0系を固定している。両者は同じソースを実
 通常環境のLibrosaは、Python 3.10 / 3.11では0.11系、Python 3.12以降では1系を環境マーカーで
 選択する。単一バージョン範囲よりmanifestは複雑になるが、対応Pythonの下限を維持しながら
 新しいPythonでは現行メジャーを利用できる。
+
+### 配布名とPython APIを分離する
+
+PyPIでは本家の`audiosr`配布物と区別するため`kagayoi-audiosr`として公開する。一方、既存の
+利用コードとCLI互換性を維持するため、import packageとconsole commandは`audiosr`のままにする。
+配布名と実行時名が異なる複雑さは生じるが、フォークの識別性と利用者互換性を両立できる。
 
 ## 検証境界
 
