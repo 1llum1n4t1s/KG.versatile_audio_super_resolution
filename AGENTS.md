@@ -11,6 +11,8 @@
   固定したCUDA indexを通常の`requirements.txt`へ追加しない。
 - 通常環境の直接依存は`requirements.txt`と`setup.py`の`REQUIRED`を同期する。
   テスト依存は`setup.py`の`EXTRAS["test"]`が正本である。
+- LibrosaはPython 3.10 / 3.11で0.11系、Python 3.12以降で1系を選ぶ環境マーカーを
+  `requirements.txt`と`setup.py`で同期し、対応Python範囲全体を解決可能に保つ。
 - `cog.yaml`はCUDA 11.7 / PyTorch 2.0系の独立した固定環境である。通常環境の版を
   機械的にコピーせず、Cog環境で互換性を検証した版だけを反映する。
 - 製品バージョンの正本は`setup.py`の`VERSION`。明示的なバージョン依頼時だけ更新し、

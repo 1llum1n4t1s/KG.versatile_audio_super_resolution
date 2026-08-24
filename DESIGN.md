@@ -99,6 +99,10 @@ memory消費を避ける一方、最初の実モデル構築時にはAudioSR che
 CUDA 11.7 / PyTorch 2.0系を固定している。両者は同じソースを実行するが、依存更新と
 セキュリティ評価は別々に行う。
 
+通常環境のLibrosaは、Python 3.10 / 3.11では0.11系、Python 3.12以降では1系を環境マーカーで
+選択する。単一バージョン範囲よりmanifestは複雑になるが、対応Pythonの下限を維持しながら
+新しいPythonでは現行メジャーを利用できる。
+
 ## 検証境界
 
 単体テストはI/O、実特徴抽出、padding、chunk、shape、seed、引数、checkpoint loader、package
