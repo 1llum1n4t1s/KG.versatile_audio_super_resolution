@@ -176,10 +176,18 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
     }
     assert set(namespace["REQUIRED"]) == requirements
     assert captured["install_requires"] == namespace["REQUIRED"]
+    assert captured["name"] == "kagayoi-audiosr"
     assert captured["python_requires"] == ">=3.10,<3.15"
     assert captured["version"] == "1.0.0"
     assert captured["url"] == "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
     assert captured["author_email"] == ""
+    assert captured["maintainer"] == "Kagayoi"
+    assert captured["maintainer_email"] == "contact@kagayoi.com"
+    assert captured["project_urls"] == {
+        "Changelog": "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/blob/main/CHANGELOG.md",
+        "Issues": "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/issues",
+        "Source": "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution",
+    }
     assert captured["extras_require"]["test"] == ["pytest>=9.1.1,<10"]
     assert captured["entry_points"] == {
         "console_scripts": ["audiosr=audiosr.__main__:main"]

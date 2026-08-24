@@ -20,6 +20,8 @@ This is the first independently maintained release of
 - Python package build metadata, a console entry point, Dependabot
   configuration, and regression tests for CLI, pipeline, Gradio, Cog, audio
   loading, and output handling.
+- PyPI distribution under the distinct `kagayoi-audiosr` name while retaining
+  the existing `audiosr` import package and command.
 
 ### Changed
 
@@ -49,6 +51,10 @@ This is the first independently maintained release of
 - Removed unused CLAP construction and import-time RoBERTa initialization from
   the super-resolution path.
 - Corrected the DDPM sample channel reference and modernized timm imports.
+- Repaired dormant CLAP audio-window inference and replaced missing optional
+  training helpers with explicit unsupported-feature errors.
+- Restored missing AudioMAE and latent-distribution imports so their configured
+  model paths fail neither linting nor initialization with `NameError`.
 
 ### Security
 

@@ -53,7 +53,9 @@ def expand_abbreviations(text):
 
 
 def expand_numbers(text):
-    return normalize_numbers(text)
+    raise NotImplementedError(
+        "Number expansion is not included in this inference distribution"
+    )
 
 
 def lowercase(text):

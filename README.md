@@ -13,6 +13,7 @@
 > releases are managed here rather than by the upstream project.
 
 [![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?style=flat-square)](CHANGELOG.md)
+[![PyPI](https://img.shields.io/pypi/v/kagayoi-audiosr?style=flat-square)](https://pypi.org/project/kagayoi-audiosr/)
 [![Python](https://img.shields.io/badge/python-3.10--3.14-blue.svg?style=flat-square)](setup.py)
 [![arXiv](https://img.shields.io/badge/upstream_arXiv-2309.07314-brightgreen.svg?style=flat-square)](https://arxiv.org/abs/2309.07314)
 [![Upstream samples](https://img.shields.io/badge/upstream-audio_samples-blue?logo=Github&style=flat-square)](https://audioldm.github.io/audiosr)
@@ -81,7 +82,13 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 
 The selector is the source of truth. The CUDA 13.0 command above is an example for the matching platform and may need to change as PyTorch publishes new compatible wheels; CPU, CUDA, ROCm, and macOS installations should use the selector's command instead.
 
-Install this fork from the repository (or run the same command from a local checkout):
+Install this fork from PyPI:
+
+```shell
+python -m pip install kagayoi-audiosr
+```
+
+To install the latest source instead, use the repository or a local checkout:
 
 ```shell
 python -m pip install git+https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution.git
@@ -89,9 +96,9 @@ python -m pip install git+https://github.com/1llum1n4t1s/KG.versatile_audio_supe
 # python -m pip install .
 ```
 
-Do not install `audiosr==0.0.7` from PyPI when you intend to use this fork;
-that package is the older upstream distribution and does not contain the
-changes documented here.
+The PyPI distribution is named `kagayoi-audiosr`, while the Python import and
+command remain `audiosr`. The separate `audiosr==0.0.7` distribution is the
+older upstream release and does not contain the changes documented here.
 
 ### Model downloads and disk space
 

@@ -19,11 +19,13 @@ import os
 from setuptools import find_packages, setup
 
 # Package meta-data.
-NAME = "audiosr"
+NAME = "kagayoi-audiosr"
 DESCRIPTION = "Versatile audio super-resolution for speech, music, and sound."
 URL = "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
 EMAIL = ""
 AUTHOR = "Haohe Liu"
+MAINTAINER = "Kagayoi"
+MAINTAINER_EMAIL = "contact@kagayoi.com"
 REQUIRES_PYTHON = ">=3.10,<3.15"
 VERSION = "1.0.0"
 
@@ -98,8 +100,15 @@ setup(
     long_description_content_type="text/markdown",
     author=AUTHOR,
     author_email=EMAIL,
+    maintainer=MAINTAINER,
+    maintainer_email=MAINTAINER_EMAIL,
     python_requires=REQUIRES_PYTHON,
     url=URL,
+    project_urls={
+        "Changelog": f"{URL}/blob/main/CHANGELOG.md",
+        "Issues": f"{URL}/issues",
+        "Source": URL,
+    },
     install_requires=REQUIRED,
     extras_require=EXTRAS,
     packages=find_packages(),
