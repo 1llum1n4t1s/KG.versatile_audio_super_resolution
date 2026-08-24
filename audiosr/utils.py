@@ -17,6 +17,17 @@ from audiosr.lowpass import lowpass
 
 hann_window = {}
 mel_basis = {}
+_LOWPASS_FILTER_TYPES = ("butter", "cheby1", "ellip", "bessel")
+_CHECKPOINT_REVISIONS = {
+    "basic": (
+        "haoheliu/audiosr_basic",
+        "74a47f49061a1e788e968cc43ad45c0b6243f37d",
+    ),
+    "speech": (
+        "haoheliu/audiosr_speech",
+        "413f1d734411663e95310c17d381279a0c049960",
+    ),
+}
 
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
@@ -112,7 +123,13 @@ def pad_wav(waveform, target_length):
     return np.pad(waveform, padding, mode="constant")
 
 
-def lowpass_filtering_prepare_inference(dl_output):
+def _select_lowpass_filter_type(seed=None):
+    if seed is None:
+        return str(np.random.choice(_LOWPASS_FILTER_TYPES))
+    return str(np.random.RandomState(int(seed)).choice(_LOWPASS_FILTER_TYPES))
+
+
+def lowpass_filtering_prepare_inference(dl_output, filter_type=None):
     waveform = dl_output["waveform"]  # [1, samples]
     sampling_rate = dl_output["sampling_rate"]
 
@@ -126,14 +143,20 @@ def lowpass_filtering_prepare_inference(dl_output):
     if cutoff_freq < 1000 or cutoff_freq >= sampling_rate / 2:
         return {"waveform_lowpass": waveform.clone()}
 
+    if filter_type is None:
+        filter_type = _select_lowpass_filter_type()
+    elif filter_type not in _LOWPASS_FILTER_TYPES:
+        raise ValueError(
+            f"filter_type must be one of {', '.join(_LOWPASS_FILTER_TYPES)}"
+        )
+
     order = 8
-    ftype = np.random.choice(["butter", "cheby1", "ellip", "bessel"])
     filtered_audio = lowpass(
         waveform.numpy().squeeze(),
         highcut=cutoff_freq,
         fs=sampling_rate,
         order=order,
-        _type=ftype,
+        _type=filter_type,
     )
 
     filtered_audio = torch.FloatTensor(filtered_audio.copy()).unsqueeze(0)
@@ -289,10 +312,7 @@ def read_list(fname):
 
 
 def get_duration(fname):
-    with contextlib.closing(wave.open(fname, "r")) as f:
-        frames = f.getnframes()
-        rate = f.getframerate()
-        return frames / float(rate)
+    return sf.info(fname).duration
 
 
 def get_bit_depth(fname):
@@ -315,14 +335,17 @@ def seed_everything(seed):
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
     torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
+    torch.backends.cudnn.benchmark = False
 
 
 
 def save_wave(waveform, inputpath, savepath, name="outwav", samplerate=48000):
-    """Save ``[batch, channels, samples]`` output, trimmed to input duration."""
+    """Save ``[batch, channels, samples]`` without changing its sample count.
+
+    ``inputpath`` remains part of the public call signature for compatibility,
+    but the generated waveform is the authority for output length.
+    """
 
     if samplerate <= 0:
         raise ValueError("samplerate must be positive")
@@ -351,8 +374,6 @@ def save_wave(waveform, inputpath, savepath, name="outwav", samplerate=48000):
     else:
         names = [name] * batches.shape[0]
 
-    input_duration = sf.info(inputpath).duration
-    target_samples = int(round(float(input_duration) * samplerate))
     os.makedirs(savepath, exist_ok=True)
 
     for index, (channels_first, output_name) in enumerate(zip(batches, names)):
@@ -372,8 +393,6 @@ def save_wave(waveform, inputpath, savepath, name="outwav", samplerate=48000):
             fname = digest[:32] + ".wav"
 
         data_to_save = np.asarray(channels_first.T)
-        if target_samples < data_to_save.shape[0]:
-            data_to_save = data_to_save[:target_samples]
 
         save_path = os.path.join(savepath, fname)
         print("\033[98m {}\033[00m" .format("Don't forget to try different seeds by setting --seed <int> so that AudioSR can have optimal performance on your hardware."))
@@ -443,21 +462,15 @@ class MyProgressBar:
 
 
 def download_checkpoint(checkpoint_name="basic"):
-    if checkpoint_name == "basic":
-        model_id = "haoheliu/audiosr_basic"
-
-        checkpoint_path = hf_hub_download(
-            repo_id=model_id, filename="pytorch_model.bin"
-        )
-    elif checkpoint_name == "speech":
-        model_id = "haoheliu/audiosr_speech"
-
-        checkpoint_path = hf_hub_download(
-            repo_id=model_id, filename="pytorch_model.bin"
-        )
-    else:
+    try:
+        model_id, revision = _CHECKPOINT_REVISIONS[checkpoint_name]
+    except KeyError:
         raise ValueError("Invalid Model Name %s" % checkpoint_name)
-    return checkpoint_path
+    return hf_hub_download(
+        repo_id=model_id,
+        filename="pytorch_model.bin",
+        revision=revision,
+    )
 
 
 def get_basic_config():

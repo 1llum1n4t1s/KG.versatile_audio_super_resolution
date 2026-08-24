@@ -11,9 +11,11 @@ import torch.nn.functional as F
 import audiosr.latent_diffusion.modules.phoneme_encoder.text as text
 from audiosr.latent_diffusion.models.ddpm import LatentDiffusion
 from audiosr.utils import (
+    _select_lowpass_filter_type,
     default_audioldm_config,
     download_checkpoint,
     load_audio,
+    seed_everything,
     read_audio_file,
     lowpass_filtering_prepare_inference,
     wav_feature_extraction,
@@ -24,20 +26,6 @@ from audiosr.utils import (
 
 _SAMPLE_RATE = 48000
 _SEGMENT_SAMPLES = 245760  # 5.12 seconds at the model's 48 kHz rate
-
-
-def seed_everything(seed):
-    import random, os
-    import numpy as np
-    import torch
-
-    random.seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.backends.cudnn.deterministic = True
-    torch.backends.cudnn.benchmark = True
 
 
 def text2phoneme(data):
@@ -107,7 +95,12 @@ def _padded_sample_count(sample_count):
     return ((int(sample_count) + _SEGMENT_SAMPLES - 1) // _SEGMENT_SAMPLES) * _SEGMENT_SAMPLES
 
 
-def _prepare_mono_batch(waveform, padded_samples, add_batch_dimension=True):
+def _prepare_mono_batch(
+    waveform,
+    padded_samples,
+    add_batch_dimension=True,
+    lowpass_filter_type=None,
+):
     """Build model features for one normalized mono waveform.
 
     ``padded_samples`` is explicit so callers processing several waveforms can
@@ -135,7 +128,11 @@ def _prepare_mono_batch(waveform, padded_samples, add_batch_dimension=True):
         "log_mel_spec": torch.as_tensor(log_mel_spec, dtype=torch.float32),
         "sampling_rate": _SAMPLE_RATE,
     }
-    batch.update(lowpass_filtering_prepare_inference(batch))
+    batch.update(
+        lowpass_filtering_prepare_inference(
+            batch, filter_type=lowpass_filter_type
+        )
+    )
     if "waveform_lowpass" not in batch:
         raise RuntimeError("lowpass feature preparation did not return waveform_lowpass")
 
@@ -150,7 +147,12 @@ def _prepare_mono_batch(waveform, padded_samples, add_batch_dimension=True):
     return batch, duration
 
 
-def make_batch_for_super_resolution(input_file, waveform=None, fbank=None):
+def make_batch_for_super_resolution(
+    input_file,
+    waveform=None,
+    fbank=None,
+    lowpass_filter_type=None,
+):
     if waveform is None:
         log_mel_spec, stft, waveform, duration, target_frame = read_audio_file(input_file)
         batch = {
@@ -159,7 +161,11 @@ def make_batch_for_super_resolution(input_file, waveform=None, fbank=None):
             "log_mel_spec": torch.as_tensor(log_mel_spec, dtype=torch.float32),
             "sampling_rate": _SAMPLE_RATE,
         }
-        batch.update(lowpass_filtering_prepare_inference(batch))
+        batch.update(
+            lowpass_filtering_prepare_inference(
+                batch, filter_type=lowpass_filter_type
+            )
+        )
         if "waveform_lowpass" not in batch:
             raise RuntimeError("lowpass feature preparation did not return waveform_lowpass")
         lowpass_mel, _ = wav_feature_extraction(batch["waveform_lowpass"], target_frame)
@@ -171,7 +177,12 @@ def make_batch_for_super_resolution(input_file, waveform=None, fbank=None):
 
     waveform = _as_mono_numpy(waveform)
     padded_samples = _padded_sample_count(waveform.size)
-    return _prepare_mono_batch(waveform, padded_samples, add_batch_dimension=True)
+    return _prepare_mono_batch(
+        waveform,
+        padded_samples,
+        add_batch_dimension=True,
+        lowpass_filter_type=lowpass_filter_type,
+    )
 
 
 def round_up_duration(duration):
@@ -368,6 +379,7 @@ def super_resolution_long_audio(
         # Reset per channel to make stochastic processing independent but
         # reproducible across channels.
         seed_everything(int(seed))
+        lowpass_filter_type = _select_lowpass_filter_type()
         for start_sample in range(0, total_samples, step_samples):
             end_sample = min(start_sample + chunk_samples, total_samples)
             current_chunk_len = end_sample - start_sample
@@ -375,7 +387,9 @@ def super_resolution_long_audio(
             original_peak = torch.max(torch.abs(chunk)) + 1e-8
 
             batch, duration = make_batch_for_super_resolution(
-                None, waveform=chunk.detach().cpu().numpy()
+                None,
+                waveform=chunk.detach().cpu().numpy(),
+                lowpass_filter_type=lowpass_filter_type,
             )
             with torch.no_grad():
                 generated = latent_diffusion.generate_batch(
@@ -418,6 +432,7 @@ def super_resolution_batch(
     seed=42,
     ddim_steps=200,
     guidance_scale=3.5,
+    lowpass_seed=None,
 ):
     """
     Process caller-grouped mono 48 kHz waveforms in one model invocation.
@@ -434,9 +449,15 @@ def super_resolution_batch(
     padded_samples = _padded_sample_count(max(original_lengths))
 
     seed_everything(int(seed))
+    lowpass_filter_type = _select_lowpass_filter_type(
+        seed if lowpass_seed is None else lowpass_seed
+    )
     batch_list = [
         _prepare_mono_batch(
-            waveform, padded_samples, add_batch_dimension=False
+            waveform,
+            padded_samples,
+            add_batch_dimension=False,
+            lowpass_filter_type=lowpass_filter_type,
         )[0]
         for waveform in prepared
     ]

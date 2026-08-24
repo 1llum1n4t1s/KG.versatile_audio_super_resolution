@@ -65,19 +65,38 @@ def make_ddim_timesteps(
     num_ddim_timesteps = int(num_ddim_timesteps)
     if ddim_discr_method == "uniform":
         c = num_ddpm_timesteps // num_ddim_timesteps
-        ddim_timesteps = np.asarray(list(range(0, num_ddpm_timesteps, c)))
+        legacy_timesteps = np.arange(0, num_ddpm_timesteps, c, dtype=np.int64) + 1
+        if (
+            legacy_timesteps.size == num_ddim_timesteps
+            and legacy_timesteps[-1] < num_ddpm_timesteps
+        ):
+            # Preserve the established schedules for exact divisors such as
+            # the default 50 steps.
+            steps_out = legacy_timesteps
+        else:
+            # Non-divisors produced the wrong number of steps, while 501+
+            # could include the invalid index ``num_ddpm_timesteps``.
+            steps_out = np.rint(
+                np.linspace(
+                    0,
+                    num_ddpm_timesteps - 1,
+                    num_ddim_timesteps,
+                )
+            ).astype(np.int64)
     elif ddim_discr_method == "quad":
         ddim_timesteps = (
             (np.linspace(0, np.sqrt(num_ddpm_timesteps * 0.8), num_ddim_timesteps)) ** 2
         ).astype(int)
+        steps_out = ddim_timesteps + 1
     else:
         raise NotImplementedError(
             f'There is no ddim discretization method called "{ddim_discr_method}"'
         )
 
-    # assert ddim_timesteps.shape[0] == num_ddim_timesteps
-    # add one to get the final alpha values right (the ones from first scale to data during sampling)
-    steps_out = ddim_timesteps + 1
+    if steps_out.size != num_ddim_timesteps:
+        raise RuntimeError("DDIM schedule does not match the requested step count")
+    if steps_out.min() < 0 or steps_out.max() >= num_ddpm_timesteps:
+        raise RuntimeError("DDIM schedule contains an out-of-range timestep")
     if verbose:
         print(f"Selected timesteps for ddim sampler: {steps_out}")
     return steps_out

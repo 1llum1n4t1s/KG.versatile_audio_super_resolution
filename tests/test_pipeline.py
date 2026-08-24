@@ -9,6 +9,7 @@ import pytest
 import torch
 
 import audiosr.pipeline as pipeline
+import audiosr.utils as utils
 from audiosr.latent_diffusion.modules.diffusionmodules.util import make_ddim_timesteps
 
 
@@ -115,6 +116,31 @@ def test_make_ddim_timesteps_rejects_invalid_step_count(steps):
         make_ddim_timesteps("uniform", steps, 1000, verbose=False)
 
 
+@pytest.mark.parametrize("steps", [1, 17, 500, 501, 1000])
+def test_make_ddim_timesteps_matches_count_and_stays_in_bounds(steps):
+    timesteps = make_ddim_timesteps("uniform", steps, 1000, verbose=False)
+
+    assert len(timesteps) == steps
+    assert np.all(np.diff(timesteps) > 0)
+    assert timesteps.min() >= 0
+    assert timesteps.max() <= 999
+
+
+def test_make_ddim_timesteps_preserves_default_schedule():
+    timesteps = make_ddim_timesteps("uniform", 50, 1000, verbose=False)
+
+    np.testing.assert_array_equal(timesteps, np.arange(0, 1000, 20) + 1)
+
+
+def test_pipeline_uses_canonical_seed_helper():
+    assert pipeline.seed_everything is utils.seed_everything
+
+    pipeline.seed_everything(123)
+
+    assert torch.backends.cudnn.deterministic is True
+    assert torch.backends.cudnn.benchmark is False
+
+
 def test_make_batch_waveform_uses_integer_padding(monkeypatch):
     calls = {}
 
@@ -132,7 +158,9 @@ def test_make_batch_waveform_uses_integer_padding(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "lowpass_filtering_prepare_inference",
-        lambda batch: {"waveform_lowpass": batch["waveform"]},
+        lambda batch, filter_type=None: {
+            "waveform_lowpass": batch["waveform"]
+        },
     )
 
     original_samples = pipeline._SEGMENT_SAMPLES + 1
@@ -179,11 +207,28 @@ def test_super_resolution_batch_groups_once_and_trims(monkeypatch):
     inputs = [np.ones(3, dtype=np.float32), np.ones(7, dtype=np.float32)]
     padded = []
 
-    def fake_prepare(waveform, padded_samples, add_batch_dimension=False):
-        padded.append((len(waveform), padded_samples, add_batch_dimension))
+    def fake_prepare(
+        waveform,
+        padded_samples,
+        add_batch_dimension=False,
+        lowpass_filter_type=None,
+    ):
+        padded.append(
+            (
+                len(waveform),
+                padded_samples,
+                add_batch_dimension,
+                lowpass_filter_type,
+            )
+        )
         return {"waveform": torch.zeros(1, padded_samples)}, len(waveform) / 48000
 
     monkeypatch.setattr(pipeline, "_prepare_mono_batch", fake_prepare)
+    monkeypatch.setattr(
+        pipeline,
+        "_select_lowpass_filter_type",
+        lambda seed=None: "ellip" if seed == 17 else pytest.fail(str(seed)),
+    )
     calls = []
 
     class FakeModel:
@@ -192,12 +237,17 @@ def test_super_resolution_batch_groups_once_and_trims(monkeypatch):
             size = batch["waveform"].shape[0]
             return torch.ones(size, 1, pipeline._SEGMENT_SAMPLES)
 
-    result = pipeline.super_resolution_batch(FakeModel(), inputs)
+    result = pipeline.super_resolution_batch(
+        FakeModel(), inputs, seed=42, lowpass_seed=17
+    )
 
     assert len(calls) == 1
     assert calls[0][0]["waveform"].shape == (2, 1, pipeline._SEGMENT_SAMPLES)
     assert calls[0][1]["duration"] == pipeline._SEGMENT_SAMPLES / 48000
-    assert padded == [(3, pipeline._SEGMENT_SAMPLES, False), (7, pipeline._SEGMENT_SAMPLES, False)]
+    assert padded == [
+        (3, pipeline._SEGMENT_SAMPLES, False, "ellip"),
+        (7, pipeline._SEGMENT_SAMPLES, False, "ellip"),
+    ]
     assert [item.shape for item in result] == [(3,), (7,)]
 
 
@@ -213,10 +263,17 @@ def test_long_audio_stereo_short_tail_and_exact_length(monkeypatch):
     source = torch.stack([torch.arange(8, dtype=torch.float32), torch.arange(8, dtype=torch.float32) + 1])
     source[0, 0] = torch.nan
     monkeypatch.setattr(pipeline, "load_audio", lambda *_args, **_kwargs: (source, 48000))
+    filter_types = []
+
+    def fake_make_batch(
+        _input, waveform=None, fbank=None, lowpass_filter_type=None
+    ):
+        filter_types.append(lowpass_filter_type)
+        return {"waveform": torch.as_tensor(waveform)}, len(waveform) / 48000
+
+    monkeypatch.setattr(pipeline, "make_batch_for_super_resolution", fake_make_batch)
     monkeypatch.setattr(
-        pipeline,
-        "make_batch_for_super_resolution",
-        lambda _input, waveform=None: ({"waveform": torch.as_tensor(waveform)}, len(waveform) / 48000),
+        pipeline, "_select_lowpass_filter_type", lambda seed=None: "bessel"
     )
 
     class FakeModel:
@@ -232,6 +289,7 @@ def test_long_audio_stereo_short_tail_and_exact_length(monkeypatch):
 
     assert result.shape == (1, 2, 8)
     assert torch.isfinite(result).all()
+    assert filter_types == ["bessel"] * 8
 
 
 @pytest.mark.parametrize(
@@ -258,7 +316,7 @@ def test_long_audio_allows_zero_overlap(monkeypatch):
     monkeypatch.setattr(
         pipeline,
         "make_batch_for_super_resolution",
-        lambda _input, waveform=None: (
+        lambda _input, waveform=None, lowpass_filter_type=None: (
             {"waveform": torch.as_tensor(waveform)},
             len(waveform) / 48000,
         ),

@@ -85,11 +85,78 @@ def test_lowpass_bypasses_unsafe_cutoff(monkeypatch, cutoff):
     torch.testing.assert_close(result, waveform)
 
 
+def test_lowpass_uses_explicit_filter_type(monkeypatch):
+    waveform = torch.ones(1, 64)
+    filter_types = []
+    monkeypatch.setattr(utils, "_locate_cutoff_freq", lambda *_args, **_kwargs: 512)
+
+    def capture_filter(audio, *, highcut, fs, order, _type):
+        filter_types.append(_type)
+        return np.asarray(audio)
+
+    monkeypatch.setattr(utils, "lowpass", capture_filter)
+    result = utils.lowpass_filtering_prepare_inference(
+        {
+            "waveform": waveform,
+            "sampling_rate": 48000,
+            "stft": torch.ones(1024, 2),
+        },
+        filter_type="ellip",
+    )["waveform_lowpass"]
+
+    assert filter_types == ["ellip"]
+    torch.testing.assert_close(result, waveform)
+
+
+@pytest.mark.parametrize("suffix", [".wav", ".flac"])
+def test_get_duration_uses_soundfile_for_supported_formats(tmp_path, suffix):
+    path = tmp_path / f"duration{suffix}"
+    sf.write(path, np.zeros(480, dtype=np.float32), 48000)
+
+    assert utils.get_duration(path) == pytest.approx(0.01)
+
+
+@pytest.mark.parametrize(
+    "checkpoint_name, repo_id, revision",
+    [
+        (
+            "basic",
+            "haoheliu/audiosr_basic",
+            "74a47f49061a1e788e968cc43ad45c0b6243f37d",
+        ),
+        (
+            "speech",
+            "haoheliu/audiosr_speech",
+            "413f1d734411663e95310c17d381279a0c049960",
+        ),
+    ],
+)
+def test_download_checkpoint_pins_revision(
+    monkeypatch, checkpoint_name, repo_id, revision
+):
+    calls = []
+
+    def fake_download(**kwargs):
+        calls.append(kwargs)
+        return "checkpoint.bin"
+
+    monkeypatch.setattr(utils, "hf_hub_download", fake_download)
+
+    assert utils.download_checkpoint(checkpoint_name) == "checkpoint.bin"
+    assert calls == [
+        {
+            "repo_id": repo_id,
+            "filename": "pytorch_model.bin",
+            "revision": revision,
+        }
+    ]
+
+
 @pytest.mark.parametrize("waveform", [
     np.zeros((2, 2, 600), dtype=np.float32),
     torch.zeros((2, 2, 600), dtype=torch.float32),
 ])
-def test_save_wave_writes_each_stereo_batch_and_trims(tmp_path, waveform):
+def test_save_wave_writes_each_stereo_batch_without_retrimming(tmp_path, waveform):
     input_path = tmp_path / "input.wav"
     sf.write(input_path, np.zeros(80, dtype=np.float32), 8000)
 
@@ -104,7 +171,25 @@ def test_save_wave_writes_each_stereo_batch_and_trims(tmp_path, waveform):
         info = sf.info(tmp_path / f"result_{index}.wav")
         assert info.samplerate == 48000
         assert info.channels == 2
-        assert info.frames == 480
+        assert info.frames == 600
+
+
+def test_save_wave_preserves_resampled_sample_count(tmp_path):
+    input_path = tmp_path / "input.wav"
+    sf.write(input_path, np.zeros(44_101, dtype=np.float32), 44_100)
+    waveform, sample_rate = utils.load_audio(input_path, target_sample_rate=48_000)
+
+    assert waveform.shape == (1, 48_002)
+
+    utils.save_wave(
+        waveform[None, ...],
+        inputpath=input_path,
+        savepath=tmp_path,
+        name="resampled",
+        samplerate=sample_rate,
+    )
+
+    assert sf.info(tmp_path / "resampled.wav").frames == waveform.shape[-1]
 
 
 def test_save_wave_shortens_long_names_deterministically(tmp_path):

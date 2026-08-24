@@ -35,12 +35,15 @@ def _load_app(monkeypatch):
         )
     )
     fake_librosa.amplitude_to_db = lambda values, ref: np.zeros_like(values)
-    fake_librosa.load = lambda *_args, **_kwargs: (
-        np.ones(8, dtype=np.float32),
-        48000,
-    )
 
-    def fake_batch(model, chunks, seed, ddim_steps, guidance_scale):
+    def fake_batch(
+        model,
+        chunks,
+        seed,
+        ddim_steps,
+        guidance_scale,
+        lowpass_seed=None,
+    ):
         calls.append(
             {
                 "model": model,
@@ -48,6 +51,7 @@ def _load_app(monkeypatch):
                 "seed": seed,
                 "ddim_steps": ddim_steps,
                 "guidance_scale": guidance_scale,
+                "lowpass_seed": lowpass_seed,
             }
         )
         return [np.asarray(chunk).copy() for chunk in chunks]
@@ -69,7 +73,12 @@ def _load_app(monkeypatch):
     monkeypatch.setitem(sys.modules, "audiosr", fake_audiosr)
     monkeypatch.setitem(sys.modules, "audiosr.pipeline", fake_pipeline)
     sys.modules.pop("app", None)
-    return importlib.import_module("app"), fake_librosa, calls, fake_gradio
+    app = importlib.import_module("app")
+    app.load_audio = lambda *_args, **_kwargs: (
+        np.ones((1, 8), dtype=np.float32),
+        48000,
+    )
+    return app, fake_librosa, calls, fake_gradio
 
 
 def test_import_does_not_launch_and_interface_keeps_batch_controls(monkeypatch):
@@ -106,6 +115,7 @@ def test_process_audio_channel_groups_batches_and_preserves_order(monkeypatch):
     assert [len(call["chunks"]) for call in calls] == [2, 1]
     assert [int(call["chunks"][0][0]) for call in calls] == [0, 92]
     assert [call["seed"] for call in calls] == [42, 44]
+    assert [call["lowpass_seed"] for call in calls] == [42, 42]
     assert output.shape == source.shape
 
 
@@ -143,17 +153,20 @@ def test_process_chunk_flattens_legacy_batch_axis_and_trims(monkeypatch):
     assert result.shape == (8,)
 
 
-def test_inference_preserves_mono_and_multi_channel_shapes(monkeypatch):
-    app, fake_librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+def test_inference_uses_canonical_loader_and_preserves_channel_shapes(monkeypatch):
+    app, _fake_librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    load_calls = []
 
-    fake_librosa.load = lambda *_args, **_kwargs: (
-        np.arange(8, dtype=np.float32),
-        48000,
-    )
+    def load_mono(path, target_sample_rate=None):
+        load_calls.append((path, target_sample_rate))
+        return np.arange(8, dtype=np.float32)[None, :], 48000
+
+    app.load_audio = load_mono
     _sr, mono = app.inference("mono.wav", "basic", 2.6, 100, 1)
     assert mono.ndim == 1
+    assert load_calls == [("mono.wav", 48000)]
 
-    fake_librosa.load = lambda *_args, **_kwargs: (
+    app.load_audio = lambda *_args, **_kwargs: (
         np.stack(
             [np.arange(8, dtype=np.float32), np.arange(8, dtype=np.float32) + 1]
         ),
@@ -189,3 +202,4 @@ def test_process_audio_channel_uses_distinct_reproducible_batch_seeds(monkeypatc
     )
 
     assert [call["seed"] for call in calls] == [7, 8, 9]
+    assert [call["lowpass_seed"] for call in calls] == [7, 7, 7]

@@ -20,6 +20,7 @@ import numpy as np
 # Resolve model code only when inference starts. Importing this UI module must
 # not initialize tokenizers or require an accelerator runtime.
 super_resolution_batch = None
+load_audio = None
 _MODEL_CACHE: dict[str, Any] = {}
 _MODEL_CACHE_LOCK = threading.Lock()
 
@@ -111,6 +112,7 @@ def _batch_results(
     guidance_scale: float,
     ddim_steps: int,
     seed: int = 42,
+    lowpass_seed: int | None = None,
 ) -> list[np.ndarray]:
     """Run the pipeline batch function and normalize its return container."""
 
@@ -129,8 +131,16 @@ def _batch_results(
 
     # Keep the positional order matching the public pipeline contract:
     # (model, waveforms, seed, ddim_steps, guidance_scale).
+    batch_kwargs = {}
+    if lowpass_seed is not None:
+        batch_kwargs["lowpass_seed"] = int(lowpass_seed)
     raw_results: Any = super_resolution_batch(
-        audiosr, chunk_list, seed, ddim_steps, guidance_scale
+        audiosr,
+        chunk_list,
+        seed,
+        ddim_steps,
+        guidance_scale,
+        **batch_kwargs,
     )
     if isinstance(raw_results, np.ndarray):
         if raw_results.ndim == 1:
@@ -301,6 +311,7 @@ def process_audio_channel(
             guidance_scale,
             batch_steps,
             seed=int(seed) + batch_start,
+            lowpass_seed=int(seed),
         )
         for result, chunk in zip(batch_results, batch_chunks):
             processed_results.append(_trim_and_normalize(result, chunk))
@@ -338,20 +349,20 @@ def inference(
     """Load, process, and return mono or multi-channel audio without reshaping it."""
 
     audiosr = _get_model(model_name)
-    audio, sr = librosa.load(audio_file, sr=48000, mono=False)
-    audio = np.asarray(audio)
+    global load_audio
+    if load_audio is None:
+        from audiosr.utils import load_audio as canonical_load_audio
 
-    # librosa's mono=False convention is [channels, samples].  Keep a mono
-    # input one-dimensional; duplicating it to stereo loses the input shape.
-    if audio.ndim == 1:
-        channels = [audio]
-    elif audio.ndim == 2:
-        if audio.shape[0] == 1:
-            channels = [audio[0]]
-        else:
-            channels = [audio[index] for index in range(audio.shape[0])]
-    else:
-        raise ValueError(f"expected mono or multi-channel audio, got {audio.shape}")
+        load_audio = canonical_load_audio
+
+    audio, sr = load_audio(audio_file, target_sample_rate=48000)
+    if hasattr(audio, "detach"):
+        audio = audio.detach().cpu().numpy()
+    audio = np.asarray(audio, dtype=np.float32)
+
+    if audio.ndim != 2:
+        raise ValueError(f"expected channels-first audio, got {audio.shape}")
+    channels = [audio[index] for index in range(audio.shape[0])]
 
     processed_channels = []
     for channel_index, channel in enumerate(channels):
