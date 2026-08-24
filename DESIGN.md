@@ -33,10 +33,11 @@
    Torchaudioで48 kHzへresampleする。
 2. `super_resolution`は各チャンネルを独立した1次元波形として処理する。
 3. `_padded_sample_count`が長さを245,760サンプル（5.12秒）単位へ切り上げる。
-4. `_prepare_mono_batch`が有限値化、振幅正規化、padding、STFT、mel、低域条件を生成する。
+4. `_prepare_mono_batch`が有限値化、振幅正規化、padding、STFT、melを生成し、記録・チャンネルで
+   固定したfilter種類から低域条件を作る。
 5. `LatentDiffusion.generate_batch`が条件付きlatentをsampleし、VAEとvocoderを通して波形を生成する。
 6. 生成波形を入力チャンネルごとの元sample数へtrim/padし、`[1, channels, samples]`へ束ねる。
-7. `save_wave`が入力durationを上限としてSoundFileで48 kHz WAVを保存する。
+7. `save_wave`が生成済みの正確なsample数を変えず、SoundFileで48 kHz WAVを保存する。
 
 ## 長尺・batch・UIの流れ
 
@@ -45,7 +46,8 @@
 - `super_resolution_batch`は長さの異なる複数のモノラル波形を共通のpadding長へ揃え、
   1回のモデル呼び出しで処理してから個別長へ戻す。
 - Gradioは5.1秒chunkと0.5秒overlapを使い、選択batch size単位で
-  `super_resolution_batch`を呼ぶ。batchごと・チャンネルごとにseedを派生させる。
+  `super_resolution_batch`を呼ぶ。生成seedはbatch・チャンネルごとに派生させる一方、
+  低域条件用`lowpass_seed`はチャンネル内で固定する。
 - Gradioのcacheは1モデルだけを保持する。同名モデルの連続要求は再利用し、
   `basic` / `speech`を切り替えると旧モデルを解放して新しいモデルを構築する。
 
@@ -57,9 +59,11 @@
 - 短い入力もSTFT前に最低1segmentへpaddingする。生成後のpaddingは利用者へ返さない。
 - 低域cutoffが0またはNyquist以上ならfilterを適用せず、入力のcopyを条件として使う。
 - 無音と非有限値は0除算やNaNを発生させず有限値として処理する。
-- DDIM stepsは1〜1000で、CLIとsamplerの両境界が検証する。
-- 同じseedと入力は再現可能にしつつ、Gradioの別batch・別チャンネルは異なる派生seedを使う。
+- DDIM stepsは1〜1000で、要求数と同数の有効なtimestepを返し、既定50 stepsのscheduleを保つ。
+- 同じseedと入力は再現可能にしつつ、Gradioの別batch・別チャンネルは異なる生成seedを使う。
+  低域filterの種類は記録・チャンネル単位で固定し、chunk境界では変えない。
 - checkpointの形式を拡張子で判別し、pickle由来checkpointは`weights_only=True`で読む。
+- 自動取得する`basic`と`speech`のcheckpointは、検証済みHugging Face revisionへ固定する。
 - package importとCLI helpはネットワーク、checkpoint、tokenizer、GPU初期化を要求しない。
 
 ## 採用済み設計判断
@@ -80,6 +84,12 @@ PyTorch tensorとdevice契約へ接続しやすいTorchaudioへ残している�
 モデルの時間解像度に合わせて245,760サンプル単位へpaddingする。任意長入力を扱える代わりに
 短い入力でも1segment分を生成する計算コストが生じる。出力側で必ず元長へ戻す。
 
+### 低域条件を記録単位で固定する
+
+推論条件のIIR filter種類はseedから記録・チャンネル単位で1回選び、全chunkとbatchで再利用する。
+chunkごとの再抽選を避けることで通過帯域やrippleの差がoverlap境界へ混入しない。Gradioでは
+生成の多様性を保つ派生seedと、条件を安定させる`lowpass_seed`を分離する。
+
 ### in-memory batchと単一モデルcache
 
 Gradio chunkを一時ファイルへ書かずbatch tensorへまとめ、I/Oとモデル呼び出し回数を減らす。
@@ -91,6 +101,12 @@ batch sizeに比例してaccelerator memoryを使うため既定値は1である
 公開API、CLI、UI importではモデルstackを読み込まない。SRで使わないCLAPはDDPMの常時構築から
 外し、学習用`get_audio_features`とRoBERTaはCLAP実行時まで遅延する。起動時の不要なHub依存と
 memory消費を避ける一方、最初の実モデル構築時にはAudioSR checkpoint取得が必要である。
+
+### checkpoint取得をrevisionへ固定する
+
+既定の`basic`と`speech`は、検証済みのHugging Face完全長revisionから取得する。package versionが
+同じなら取得時期によって重みが変わらないことを優先し、model更新はrevisionと回帰テストを
+明示的に同期する。利用者が指定したlocal checkpoint pathはこの固定対象外である。
 
 ### 対応Pythonに応じてLibrosaを選択する
 

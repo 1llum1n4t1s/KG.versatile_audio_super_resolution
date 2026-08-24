@@ -28,14 +28,19 @@
 - モノラル化を暗黙に行わない。CLI、長尺処理、Gradio、保存処理でチャンネル数と順序を保つ。
 - 特徴抽出前の長さは245,760サンプル単位に切り上げ、生成後に入力の正確な長さへ戻す。
 - 無音、NaN、Infinity、短い最終チャンク、ゼロoverlapを有限値のまま処理する。
-- DDIM stepsは1〜1000。CLIだけでなくサンプラー境界でも検証する。
+- DDIM stepsは1〜1000。要求数と同じ個数の有効なtimestepを返し、既定50 stepsのscheduleを
+  維持したうえで、CLIだけでなくサンプラー境界でも検証する。
+- 推論用低域filterの種類はseedから記録・チャンネル単位で1回だけ選び、長尺chunkとbatch間で
+  再抽選しない。Gradioの生成用派生seedとは独立した`lowpass_seed`で記録内を固定する。
 - `.bin` / `.ckpt`は`torch.load(..., weights_only=True)`、`.safetensors`は
   `safetensors.torch.load_file`で読む。安全でないpickle fallbackを追加しない。
+- `basic` / `speech`の自動checkpoint取得は検証済みのHugging Face完全長revisionへ固定し、
+  既定branchへ戻さない。revision更新時は両modelの取得引数を回帰テストする。
 - CLIの`--help`や`import audiosr`では、モデル構築、checkpoint download、
   `from_pretrained`を実行しない。CLAP・学習用依存は実際に使う経路まで遅延する。
 - Gradioは同時に1モデルだけをキャッシュする。モデル切替時は旧モデルを解放し、
   バッチとチャンネルには再現可能で衝突しない派生seedを渡す。
-- 通常の音声I/OはSoundFileを使い、resamplingにはTorchaudioを使う。通常推論へ
+- 通常の音声I/Oとduration取得はSoundFileを使い、resamplingにはTorchaudioを使う。通常推論へ
   `ffprobe`、一時WAV、外部変換プロセスを再導入しない。
 
 ## 変更時の確認範囲
