@@ -24,6 +24,9 @@ This is the first independently maintained release of
 ### Changed
 
 - Raised the supported Python range to 3.10 through 3.14.
+- Use librosa 0.11 on Python 3.10/3.11 and librosa 1.x on Python 3.12 through
+  3.14, allowing the newest compatible major without dropping older Python
+  support.
 - Updated the normal installation path to current PyTorch, Transformers,
   Gradio, timm, NumPy, SoundFile, and related dependencies.
 - Replaced the unmaintained `progressbar` package with `progressbar2`.
