@@ -4,6 +4,34 @@ All notable changes to this independently maintained fork are recorded here.
 The upstream project history before this fork remains available in the
 [upstream repository](https://github.com/haoheliu/versatile_audio_super_resolution).
 
+## [Unreleased]
+
+## [1.0.1] - 2026-08-25
+
+### Changed
+
+- Pinned the `basic` and `speech` checkpoint downloads to verified Hugging
+  Face revisions for reproducible model selection.
+
+### Fixed
+
+- Kept one seeded low-pass filter family across every chunk and batch of a
+  recording, avoiding conditioning drift at chunk boundaries.
+- Returned the requested number of valid DDIM timesteps across the full
+  supported range while preserving the established default schedule.
+- Preserved the generated sample count after resampling instead of trimming
+  output again from the source-file duration.
+- Used SoundFile consistently for Gradio input and duration inspection,
+  including supported non-WAV formats such as FLAC.
+- Unified deterministic seed handling across the Python, CLI, and Gradio
+  inference paths.
+
+### Removed
+
+- Removed the legacy Cog/Replicate deployment configuration, Predictor entry
+  points, and their dedicated regression tests. Supported execution paths are
+  now the `audiosr` CLI, Python API, and local Gradio application.
+
 ## [1.0.0] - 2026-08-24
 
 This is the first independently maintained release of

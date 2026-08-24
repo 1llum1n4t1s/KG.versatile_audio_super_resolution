@@ -12,13 +12,13 @@
 > **This is an independently maintained fork.** Development, issues, and
 > releases are managed here rather than by the upstream project.
 
-[![Version](https://img.shields.io/badge/version-1.0.0-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.1-blue.svg?style=flat-square)](CHANGELOG.md)
 [![PyPI](https://img.shields.io/pypi/v/kagayoi-audiosr?style=flat-square)](https://pypi.org/project/kagayoi-audiosr/)
 [![Python](https://img.shields.io/badge/python-3.10--3.14-blue.svg?style=flat-square)](setup.py)
 [![arXiv](https://img.shields.io/badge/upstream_arXiv-2309.07314-brightgreen.svg?style=flat-square)](https://arxiv.org/abs/2309.07314)
 [![Upstream samples](https://img.shields.io/badge/upstream-audio_samples-blue?logo=Github&style=flat-square)](https://audioldm.github.io/audiosr)
 
-Current fork release: **1.0.0**. See the [changelog](CHANGELOG.md) for details.
+Current fork release: **1.0.1**. See the [changelog](CHANGELOG.md) for details.
 
 AudioSR restores high-frequency detail from a low-pass audio condition and writes a 48 kHz result. It works with many kinds of audio, including music, speech, and environmental recordings.
 
@@ -53,7 +53,7 @@ Bit depth is a separate property from sample rate and generated bandwidth. Incre
 - 2025-06-28: Added an [LSD calculation pitfall demonstration](example/lsd_calculation_pitfall/README.md) showing the importance of energy scaling for fair Log Spectral Distance evaluation.
 - 2024-12-31: The training code of AudioSR can be found [here](https://drive.google.com/file/d/1BaZuHbk1AfURX7SvkaD5_ZWLwun-wdpW/view?usp=drive_link) (for reference only; the code is not carefully organized).
 - 2024-12-16: Added [Important things to know to make AudioSR work](example/how_to_make_audiosr_work.md).
-- 2023-09-24: Added the Replicate demo (@nateraw) and fixed a Windows error and a librosa warning (@ORI-Muchim).
+- 2023-09-24: Fixed a Windows error and a librosa warning (@ORI-Muchim).
 - 2023-09-16: Fixed the DC shift issue and duration padding bug, and updated the default DDIM steps to 50.
 
 ## Installation
@@ -203,8 +203,6 @@ different checkpoint is selected.
   [the upstream guidance](example/how_to_make_audiosr_work.md).
 - **DirectML:** it is not supported. Use CUDA, Apple MPS where compatible, or
   CPU.
-- **Cog:** `cog.yaml` retains its legacy CUDA 11.7 / PyTorch 2.0 runtime. Normal
-  local installations use the current dependency ranges in `requirements.txt`.
 
 ## Developer notes
 
