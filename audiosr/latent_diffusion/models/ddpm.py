@@ -9,8 +9,6 @@ from contextlib import contextmanager
 from functools import partial
 from tqdm import tqdm
 from torchvision.utils import make_grid
-from audiosr.latent_diffusion.modules.encoders.modules import *
-
 from audiosr.latent_diffusion.util import (
     exists,
     default,
@@ -100,14 +98,6 @@ class DDPM(nn.Module):
         self.log_every_t = log_every_t
         self.first_stage_key = first_stage_key
         self.sampling_rate = sampling_rate
-
-        self.clap = CLAPAudioEmbeddingClassifierFreev2(
-            pretrained_path="",
-            enable_cuda=self.device == "cuda",
-            sampling_rate=self.sampling_rate,
-            embed_mode="audio",
-            amodel="HTSAT-base",
-        )
 
         self.initialize_param_check_toolkit()
 
@@ -414,8 +404,12 @@ class DDPM(nn.Module):
 
     @torch.no_grad()
     def sample(self, batch_size=16, return_intermediates=False):
-        shape = (batch_size, channels, self.latent_t_size, self.latent_f_size)
-        self.channels
+        shape = (
+            batch_size,
+            self.channels,
+            self.latent_t_size,
+            self.latent_f_size,
+        )
         return self.p_sample_loop(shape, return_intermediates=return_intermediates)
 
     def q_sample(self, x_start, t, noise=None):
@@ -1545,8 +1539,11 @@ class LatentDiffusion(DDPM):
             waveform_lowpass = super().get_input(batch, "waveform_lowpass")
             waveform = self.postprocessing(waveform, waveform_lowpass)
 
+            waveform = np.nan_to_num(
+                waveform, nan=0.0, posinf=1.0, neginf=-1.0
+            )
             max_amp = np.max(np.abs(waveform), axis=-1)
-            waveform = 0.5 * waveform / max_amp[..., None]
+            waveform = 0.5 * waveform / np.maximum(max_amp[..., None], 1e-8)
             mean_amp = np.mean(waveform, axis=-1)[..., None]
             waveform = waveform - mean_amp
 

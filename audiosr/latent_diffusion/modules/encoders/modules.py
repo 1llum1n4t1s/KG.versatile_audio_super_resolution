@@ -2,7 +2,6 @@ import torch
 import logging
 import torch.nn as nn
 from audiosr.clap.open_clip import create_model
-from audiosr.clap.training.data import get_audio_features
 import torchaudio
 from transformers import RobertaTokenizer, AutoTokenizer, T5EncoderModel
 import torch.nn.functional as F
@@ -641,6 +640,10 @@ class CLAPAudioEmbeddingClassifierFreev2(nn.Module):
                 audio_data = batch.squeeze(1).to("cpu")
                 self.mel_transform = self.mel_transform.to(audio_data.device)
                 mel = self.mel_transform(audio_data)
+                # The training data module initializes a RoBERTa tokenizer.
+                # Keep that optional dependency out of VAE-only SR imports.
+                from audiosr.clap.training.data import get_audio_features
+
                 audio_dict = get_audio_features(
                     audio_data,
                     mel,

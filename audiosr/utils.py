@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib
 from huggingface_hub import hf_hub_download
 import numpy as np
@@ -6,9 +7,6 @@ import torch
 
 from inspect import isfunction
 import os
-import subprocess
-import tempfile
-import json
 import soundfile as sf
 import time
 import wave
@@ -39,6 +37,45 @@ def spectral_de_normalize_torch(magnitudes):
     return output
 
 
+def load_audio(path, target_sample_rate=None):
+    """Load an audio file as a ``[channels, samples]`` float32 tensor.
+
+    ``soundfile`` returns samples in ``[samples, channels]`` order.  Keeping
+    the conversion here makes the rest of the audio pipeline independent of
+    the decoder used by callers.  Resampling is deliberately performed only
+    when a target rate was requested and differs from the file's rate.
+    """
+
+    audio, sample_rate = sf.read(
+        path,
+        always_2d=True,
+        dtype="float32",
+    )
+    audio = np.asarray(audio, dtype=np.float32)
+    if audio.ndim == 1:
+        audio = audio[:, np.newaxis]
+    audio = np.nan_to_num(audio, nan=0.0, posinf=1.0, neginf=-1.0)
+    waveform = torch.from_numpy(np.ascontiguousarray(audio.T))
+    sample_rate = int(sample_rate)
+
+    if target_sample_rate is None:
+        return waveform, sample_rate
+
+    target_sample_rate = int(target_sample_rate)
+    if target_sample_rate <= 0:
+        raise ValueError("target_sample_rate must be positive")
+
+    if sample_rate != target_sample_rate:
+        waveform = torchaudio.functional.resample(
+            waveform,
+            sample_rate,
+            target_sample_rate,
+        )
+        sample_rate = target_sample_rate
+
+    return waveform.to(dtype=torch.float32), sample_rate
+
+
 def _locate_cutoff_freq(stft, percentile=0.97):
     def _find_cutoff(x, percentile=0.95):
         percentile = x[-1] * percentile
@@ -53,18 +90,26 @@ def _locate_cutoff_freq(stft, percentile=0.97):
 
 
 def pad_wav(waveform, target_length):
-    waveform_length = waveform.shape[-1]
-    assert waveform_length > 100, "Waveform is too short, %s" % waveform_length
+    """Crop or zero-pad the final (time) dimension to ``target_length``."""
 
+    target_length = int(target_length)
+    if target_length < 0:
+        raise ValueError("target_length must be non-negative")
+
+    waveform_length = int(waveform.shape[-1])
     if waveform_length == target_length:
         return waveform
 
-    # Pad
-    temp_wav = np.zeros((1, target_length), dtype=np.float32)
-    rand_start = 0
+    if waveform_length > target_length:
+        return waveform[..., :target_length]
 
-    temp_wav[:, rand_start : rand_start + waveform_length] = waveform
-    return temp_wav
+    pad_amount = target_length - waveform_length
+    if torch.is_tensor(waveform):
+        return torch.nn.functional.pad(waveform, (0, pad_amount))
+
+    waveform = np.asarray(waveform)
+    padding = [(0, 0)] * (waveform.ndim - 1) + [(0, pad_amount)]
+    return np.pad(waveform, padding, mode="constant")
 
 
 def lowpass_filtering_prepare_inference(dl_output):
@@ -75,9 +120,11 @@ def lowpass_filtering_prepare_inference(dl_output):
         _locate_cutoff_freq(dl_output["stft"], percentile=0.985) / 1024
     ) * 24000
     
-    # If the audio is almost empty. Give up processing
-    if(cutoff_freq < 1000):
-        cutoff_freq = 24000
+    # If the audio is almost empty, or the cutoff is at/above Nyquist, there
+    # is no safe filter to apply.  Return a copy so callers can still mutate
+    # the result without changing the input batch.
+    if cutoff_freq < 1000 or cutoff_freq >= sampling_rate / 2:
+        return {"waveform_lowpass": waveform.clone()}
 
     order = 8
     ftype = np.random.choice(["butter", "cheby1", "ellip", "bessel"])
@@ -181,34 +228,49 @@ def wav_feature_extraction(waveform, target_frame):
 
 
 def normalize_wav(waveform):
+    waveform = np.nan_to_num(
+        np.asarray(waveform), nan=0.0, posinf=1.0, neginf=-1.0
+    )
     waveform = waveform - np.mean(waveform)
     waveform = waveform / (np.max(np.abs(waveform)) + 1e-8)
     return waveform * 0.5
 
-def read_wav_file(filename):
-    waveform, sr = torchaudio.load(filename)
-    duration = waveform.size(-1) / sr
+def read_wav_file(filename, channel=0):
+    waveform, sr = load_audio(filename, target_sample_rate=48000)
+
+    if channel is not None:
+        if not isinstance(channel, (int, np.integer)):
+            raise TypeError("channel must be an integer or None")
+        channel = int(channel)
+        if channel < 0:
+            channel += waveform.shape[0]
+        if channel < 0 or channel >= waveform.shape[0]:
+            raise IndexError("channel index out of range")
+        waveform = waveform[channel : channel + 1]
+
+    source_samples = int(waveform.shape[-1])
+    if source_samples <= 100:
+        raise ValueError(
+            f"audio is too short for AudioSR ({source_samples} samples; need more than 100)"
+        )
+    duration = source_samples / float(sr)
 
     if(duration > 10.24):
         print("\033[93m {}\033[00m" .format("Warning: audio is longer than 10.24 seconds, may degrade the model performance. It's recommand to truncate your audio to 5.12 seconds before input to AudioSR to get the best performance."))
 
-    if(duration % 5.12 != 0):
-        pad_duration = duration + (5.12 - duration % 5.12)
-    else:
-        pad_duration = duration
+    padding_samples = 245_760  # 5.12 seconds at 48 kHz
+    target_samples = (
+        (source_samples + padding_samples - 1) // padding_samples
+    ) * padding_samples
+    target_frame = target_samples // 480
+    pad_duration = target_samples / 48000.0
 
-    target_frame = int(pad_duration * 100)
-
-    waveform = torchaudio.functional.resample(waveform, sr, 48000)
-
-    waveform = waveform.numpy()[0, ...]
-
-    waveform = normalize_wav(
-        waveform
-    )  # TODO rescaling the waveform will cause low LSD score
-
-    waveform = waveform[None, ...]
-    waveform = pad_wav(waveform, target_length=int(48000 * pad_duration))
+    waveform = waveform.numpy()
+    if waveform.shape[-1] > 0:
+        waveform = normalize_wav(
+            waveform
+        )  # TODO rescaling the waveform will cause low LSD score
+    waveform = pad_wav(waveform, target_length=target_samples)
     return waveform, target_frame, pad_duration
 
 def read_audio_file(filename):
@@ -259,66 +321,64 @@ def seed_everything(seed):
 
 
 
-def strip_silence(orignal_path, input_path, output_path):
-    get_dur = subprocess.run([
-        'ffprobe',
-        '-v', 'error',
-        '-select_streams', 'a:0',
-        '-show_entries', 'format=duration',
-        '-sexagesimal',
-        '-of', 'json',
-        orignal_path
-    ], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+def save_wave(waveform, inputpath, savepath, name="outwav", samplerate=48000):
+    """Save ``[batch, channels, samples]`` output, trimmed to input duration."""
 
-    duration = json.loads(get_dur.stdout)['format']['duration']
-    
-    subprocess.run([
-        'ffmpeg',
-        '-y',
-        '-ss', '00:00:00',
-        '-i', input_path,
-        '-t', duration,
-        '-c', 'copy',
-        output_path
-    ])
-    os.remove(input_path)
+    if samplerate <= 0:
+        raise ValueError("samplerate must be positive")
 
+    if torch.is_tensor(waveform):
+        waveform = waveform.detach().cpu().numpy()
+    waveform = np.asarray(waveform)
+    if waveform.ndim == 1:
+        batches = waveform[np.newaxis, np.newaxis, :]
+    elif waveform.ndim == 2:
+        # Preserve the historical contract: two dimensions mean a batch of
+        # mono outputs. Multi-channel output is represented explicitly as BCT.
+        batches = waveform[:, np.newaxis, :]
+    elif waveform.ndim == 3:
+        batches = waveform
+    else:
+        raise ValueError(
+            "waveform must have shape [samples], [batch, samples], or "
+            "[batch, channels, samples]"
+        )
 
+    if isinstance(name, (list, tuple)):
+        if len(name) != batches.shape[0]:
+            raise ValueError("name list length must match waveform batch size")
+        names = list(name)
+    else:
+        names = [name] * batches.shape[0]
 
-def save_wave(waveform, inputpath, savepath, name="outwav", samplerate=16000):
-    if type(name) is not list:
-        name = [name] * waveform.shape[0]
+    input_duration = sf.info(inputpath).duration
+    target_samples = int(round(float(input_duration) * samplerate))
+    os.makedirs(savepath, exist_ok=True)
 
-    for i in range(waveform.shape[0]):
-        if waveform.shape[0] > 1:
-            fname = "%s_%s.wav" % (
-                os.path.basename(name[i])
-                if (not ".wav" in name[i])
-                else os.path.basename(name[i]).split(".")[0],
-                i,
-            )
-        else:
-            fname = (
-                "%s.wav" % os.path.basename(name[i])
-                if (not ".wav" in name[i])
-                else os.path.basename(name[i]).split(".")[0]
-            )
-            # Avoid the file name too long to be saved
-            if len(fname) > 255:
-                fname = f"{hex(hash(fname))}.wav"
+    for index, (channels_first, output_name) in enumerate(zip(batches, names)):
+        output_name = os.path.basename(os.fspath(output_name))
+        while output_name.lower().endswith(".wav"):
+            output_name = output_name[:-4]
+        if not output_name:
+            output_name = "outwav"
+        if batches.shape[0] > 1:
+            output_name = f"{output_name}_{index}"
+        fname = output_name + ".wav"
+
+        # Keep each path component within the common 255-character limit.
+        # Python's hash() is randomized, so use a stable digest instead.
+        if len(fname) > 255:
+            digest = hashlib.sha256(fname.encode("utf-8")).hexdigest()
+            fname = digest[:32] + ".wav"
+
+        data_to_save = np.asarray(channels_first.T)
+        if target_samples < data_to_save.shape[0]:
+            data_to_save = data_to_save[:target_samples]
 
         save_path = os.path.join(savepath, fname)
-        temp_path = os.path.join(tempfile.gettempdir(), fname)
         print("\033[98m {}\033[00m" .format("Don't forget to try different seeds by setting --seed <int> so that AudioSR can have optimal performance on your hardware."))
         print("Save audio to %s." % save_path)
-        
-        # Reshape waveform for soundfile
-        data_to_save = waveform[i].T.cpu().numpy()
-        if data_to_save.ndim == 1:
-            data_to_save = data_to_save[:, np.newaxis]
-
-        sf.write(temp_path, data_to_save, samplerate=samplerate)
-        strip_silence(inputpath, temp_path, save_path)
+        sf.write(save_path, data_to_save, samplerate=samplerate)
 
 
 def exists(x):

@@ -1,9 +1,8 @@
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
-# python3 setup.py sdist bdist_wheel
 """
 @File    :   setup.py.py    
-@Contact :   haoheliu@gmail.com
+@Contact :   https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/issues
 @License :   (C)Copyright 2020-2100
 
 @Modify Time      @Author    @Version    @Desciption
@@ -14,52 +13,55 @@
 # !/usr/bin/env python
 # -*- coding: utf-8 -*-
 
-# Note: To use the 'upload' functionality of this file, you must:
-#   $ pipenv install twine --dev
-
 import io
 import os
-import sys
-from shutil import rmtree
 
-from setuptools import find_packages, setup, Command
+from setuptools import find_packages, setup
 
 # Package meta-data.
 NAME = "audiosr"
-DESCRIPTION = "This package is written for text-to-audio/music generation."
-URL = "https://github.com/haoheliu/audiosr"
-EMAIL = "haoheliu@gmail.com"
+DESCRIPTION = "Versatile audio super-resolution for speech, music, and sound."
+URL = "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
+EMAIL = ""
 AUTHOR = "Haohe Liu"
-REQUIRES_PYTHON = ">=3.7.0"
-VERSION = "0.0.7"
+REQUIRES_PYTHON = ">=3.10,<3.15"
+VERSION = "1.0.0"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    "torch>=1.13.0",
-    "torchaudio>=0.13.0",
-    "torchvision>=0.14.0",
-    "tqdm",
-    "gradio",
-    "pyyaml",
-    "einops",
-    "chardet",
-    "numpy<=1.23.5",
-    "soundfile",
-    "librosa==0.9.2",
-    "scipy",
-    "pandas",
-    "unidecode",
-    "phonemizer",
-    "torchlibrosa>=0.0.9",
-    "transformers==4.30.2",
-    "huggingface_hub",
-    "progressbar",
-    "ftfy",
-    "timm",
+    "torch>=2.13",
+    "torchaudio>=2.11",
+    "torchvision>=0.28",
+    "tqdm>=4.70",
+    "gradio>=6.25,<7",
+    "pyyaml>=6.0.3",
+    "einops>=0.8.2",
+    "chardet>=7.6",
+    "numpy>=2.2.6,<3",
+    "soundfile>=0.14",
+    "librosa>=0.11,<1",
+    "scipy>=1.15.3,<2",
+    "pandas>=2.3.3,<4",
+    "unidecode>=1.4",
+    "phonemizer>=3.4",
+    "torchlibrosa>=0.1",
+    "transformers>=5.15.1,<6",
+    "huggingface-hub>=1.28,<2",
+    "Pillow>=12.3,<13",
+    "requests>=2.34.2,<3",
+    "scikit-learn>=1.7.2,<2",
+    "progressbar2>=4.6,<5",
+    "ftfy>=6.3.1,<7",
+    "timm>=1.0.28,<2",
+    "matplotlib>=3.10.9,<4",
+    "pyloudnorm>=0.2,<1",
+    "safetensors>=0.8,<1",
 ]
 
 # What packages are optional?
-EXTRAS = {}
+EXTRAS = {
+    "test": ["pytest>=9.1.1,<10"],
+}
 
 # The rest you shouldn't have to touch too much :)
 # ------------------------------------------------
@@ -86,43 +88,6 @@ else:
     about["__version__"] = VERSION
 
 
-class UploadCommand(Command):
-    """Support setup.py upload."""
-
-    description = "Build and publish the package."
-    user_options = []
-
-    @staticmethod
-    def status(s):
-        """Prints things in bold."""
-        print("\033[1m{0}\033[0m".format(s))
-
-    def initialize_options(self):
-        pass
-
-    def finalize_options(self):
-        pass
-
-    def run(self):
-        try:
-            self.status("Removing previous builds…")
-            rmtree(os.path.join(here, "dist"))
-        except OSError:
-            pass
-
-        self.status("Building Source and Wheel (universal) distribution…")
-        os.system("{0} setup.py sdist bdist_wheel --universal".format(sys.executable))
-
-        self.status("Uploading the package to PyPI via Twine…")
-        os.system("twine upload dist/*")
-
-        self.status("Pushing git tags…")
-        os.system("git tag v{0}".format(about["__version__"]))
-        os.system("git push --tags")
-
-        sys.exit()
-
-
 # Where the magic happens:
 setup(
     name=NAME,
@@ -134,29 +99,22 @@ setup(
     author_email=EMAIL,
     python_requires=REQUIRES_PYTHON,
     url=URL,
-    # packages=find_packages(exclude=[]),
-    # If your package is a single module, use this instead of 'packages':
-    # entry_points={
-    #     'console_scripts': ['mycli=mymodule:cli'],
-    # },
     install_requires=REQUIRED,
     extras_require=EXTRAS,
     packages=find_packages(),
     include_package_data=True,
     license="MIT",
     classifiers=[
-        # Trove classifiers
-        # Full list: https://pypi.python.org/pypi?%3Aaction=list_classifiers
-        "License :: OSI Approved :: MIT License",
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.7",
+        "Programming Language :: Python :: 3.10",
+        "Programming Language :: Python :: 3.11",
+        "Programming Language :: Python :: 3.12",
+        "Programming Language :: Python :: 3.13",
+        "Programming Language :: Python :: 3.14",
         "Programming Language :: Python :: Implementation :: CPython",
-        "Programming Language :: Python :: Implementation :: PyPy",
     ],
-    # $ setup.py publish support.
-    cmdclass={
-        "upload": UploadCommand,
+    entry_points={
+        "console_scripts": ["audiosr=audiosr.__main__:main"],
     },
-    scripts=["bin/audiosr.cmd", "bin/audiosr"],
 )

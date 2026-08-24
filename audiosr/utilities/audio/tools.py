@@ -4,6 +4,7 @@ from scipy.io.wavfile import write
 import torchaudio
 
 from audiosr.utilities.audio.audio_processing import griffin_lim
+from audiosr.utils import load_audio
 
 
 def pad_wav(waveform, segment_length):
@@ -11,15 +12,19 @@ def pad_wav(waveform, segment_length):
     assert waveform_length > 100, "Waveform is too short, %s" % waveform_length
     if segment_length is None or waveform_length == segment_length:
         return waveform
-    elif waveform_length > segment_length:
-        return waveform[:segment_length]
-    elif waveform_length < segment_length:
-        temp_wav = np.zeros((1, segment_length))
-        temp_wav[:, :waveform_length] = waveform
+    if waveform_length > segment_length:
+        return waveform[..., :segment_length]
+    temp_wav = np.zeros(
+        (*waveform.shape[:-1], segment_length), dtype=waveform.dtype
+    )
+    temp_wav[..., :waveform_length] = waveform
     return temp_wav
 
 
 def normalize_wav(waveform):
+    waveform = np.nan_to_num(
+        np.asarray(waveform), nan=0.0, posinf=1.0, neginf=-1.0
+    )
     waveform = waveform - np.mean(waveform)
     waveform = waveform / (np.max(np.abs(waveform)) + 1e-8)
     return waveform * 0.5
@@ -27,14 +32,14 @@ def normalize_wav(waveform):
 
 def read_wav_file(filename, segment_length):
     # waveform, sr = librosa.load(filename, sr=None, mono=True) # 4 times slower
-    waveform, sr = torchaudio.load(filename)  # Faster!!!
+    waveform, sr = load_audio(filename)
     waveform = torchaudio.functional.resample(waveform, orig_freq=sr, new_freq=16000)
     waveform = waveform.numpy()[0, ...]
     waveform = normalize_wav(waveform)
     waveform = waveform[None, ...]
     waveform = pad_wav(waveform, segment_length)
 
-    waveform = waveform / np.max(np.abs(waveform))
+    waveform = waveform / max(float(np.max(np.abs(waveform))), 1e-8)
     waveform = 0.5 * waveform
 
     return waveform

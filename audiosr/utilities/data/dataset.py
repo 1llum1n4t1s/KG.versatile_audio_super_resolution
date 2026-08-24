@@ -10,6 +10,7 @@ import torch.nn.functional
 import torch
 import numpy as np
 import torchaudio
+from audiosr.utils import load_audio
 
 
 class AudioDataset(Dataset):
@@ -305,6 +306,9 @@ class AudioDataset(Dataset):
         #     )
 
     def normalize_wav(self, waveform):
+        waveform = np.nan_to_num(
+            np.asarray(waveform), nan=0.0, posinf=1.0, neginf=-1.0
+        )
         waveform = waveform - np.mean(waveform)
         waveform = waveform / (np.max(np.abs(waveform)) + 1e-8)
         return waveform * 0.5  # Manually limit the maximum amplitude into 0.5
@@ -373,7 +377,7 @@ class AudioDataset(Dataset):
 
     def read_wav_file(self, filename):
         # waveform, sr = librosa.load(filename, sr=None, mono=True) # 4 times slower
-        waveform, sr = torchaudio.load(filename)
+        waveform, sr = load_audio(filename)
 
         waveform, random_start = self.random_segment_wav(
             waveform, target_length=int(sr * self.duration)

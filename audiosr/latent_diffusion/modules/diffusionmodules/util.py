@@ -55,6 +55,14 @@ def make_beta_schedule(
 def make_ddim_timesteps(
     ddim_discr_method, num_ddim_timesteps, num_ddpm_timesteps, verbose=True
 ):
+    if not isinstance(num_ddim_timesteps, (int, np.integer)):
+        raise TypeError("num_ddim_timesteps must be an integer")
+    if not 1 <= int(num_ddim_timesteps) <= int(num_ddpm_timesteps):
+        raise ValueError(
+            "num_ddim_timesteps must be between 1 and num_ddpm_timesteps"
+        )
+
+    num_ddim_timesteps = int(num_ddim_timesteps)
     if ddim_discr_method == "uniform":
         c = num_ddpm_timesteps // num_ddim_timesteps
         ddim_timesteps = np.asarray(list(range(0, num_ddpm_timesteps, c)))

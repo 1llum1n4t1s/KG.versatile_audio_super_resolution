@@ -1,5 +1,8 @@
 *.pyc
 __pycache__
+.venv/
+.pytest_cache/
+.coverage
 test.py
 flagged
 output
@@ -7,5 +10,9 @@ gradio_cached*
 *egg-info
 build*
 *.wav
+*.bin
+*.ckpt
+*.pt
+*.safetensors
 dist/
 *DS_Store*
