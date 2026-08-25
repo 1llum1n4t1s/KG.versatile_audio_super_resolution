@@ -31,9 +31,9 @@ VERSION = "1.0.1"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    "torch>=2.13",
+    "torch>=2.12",
     "torchaudio>=2.11",
-    "torchvision>=0.28",
+    "torchvision>=0.27",
     "tqdm>=4.70",
     "gradio>=6.25,<7",
     "pyyaml>=6.0.3",

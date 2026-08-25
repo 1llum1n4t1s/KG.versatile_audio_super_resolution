@@ -80,7 +80,13 @@ Install PyTorch before AudioSR. Select the wheel for the operating system, Pytho
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
 
-The selector is the source of truth. The CUDA 13.0 command above is an example for the matching platform and may need to change as PyTorch publishes new compatible wheels; CPU, CUDA, ROCm, and macOS installations should use the selector's command instead.
+The selector is the source of truth for CPU, CUDA, and macOS. For AMD GPUs and Ryzen APUs, use the hardware-specific command from the [AMD ROCm PyTorch installer](https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html). For example, the current Windows command for a `gfx1103` Radeon 760M/780M with ROCm 7.14 is:
+
+```shell
+python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "torch[device-gfx1103]==2.12.0+rocm7.14.0" "torchvision[device-gfx1103]==0.27.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"
+```
+
+These commands are examples for the matching platform and may change as PyTorch or ROCm publishes new compatible wheels. Always use the current command from the corresponding official installer.
 
 Install this fork from PyPI:
 
@@ -137,7 +143,7 @@ After installation, the `audiosr` executable is also available on supported shel
 
 ### Device selection
 
-`-d/--device` defaults to `auto`, which selects CUDA when available, then Apple MPS, and otherwise CPU. The supported values are:
+`-d/--device` defaults to `auto`, which selects the PyTorch CUDA/HIP device when available, then Apple MPS, and otherwise CPU. The supported values are:
 
 - `auto`
 - `cpu`
@@ -145,7 +151,7 @@ After installation, the `audiosr` executable is also available on supported shel
 - `cuda:N` (for example, `cuda:0` or `cuda:1`)
 - `mps`
 
-DirectML is not supported. MPS support depends on the installed PyTorch build and the macOS/Apple hardware; if MPS fails, use a compatible CUDA or CPU installation.
+PyTorch intentionally exposes ROCm through the `torch.cuda` API, so ROCm users must select `cuda` or `cuda:N`, not `rocm`. `torch.version.hip` can be used to distinguish a ROCm build from a CUDA build. DirectML is not supported. MPS support depends on the installed PyTorch build and the macOS/Apple hardware; if MPS fails, use a compatible CUDA or CPU installation.
 
 Examples:
 
@@ -154,6 +160,26 @@ python -m audiosr -i path/to/input.wav -d cuda:0
 python -m audiosr -i path/to/input.wav -d mps
 python -m audiosr -i path/to/input.wav -d cpu
 ```
+
+### ROCm hardware verification
+
+The ROCm test is skipped during the normal CPU test suite. On a machine with an AMD ROCm PyTorch wheel installed, run the opt-in smoke test to verify real GPU kernels and AudioSR's automatic device selection:
+
+```powershell
+$env:AUDIOSR_RUN_ROCM_HARDWARE = "1"
+python -m pytest -q tests/test_rocm_hardware.py
+```
+
+To additionally download the basic checkpoint and perform an end-to-end AudioSR conversion, enable the slower full-inference test. It uses one DDIM step by default; set `AUDIOSR_ROCM_DDIM_STEPS` to exercise an application-specific value:
+
+```powershell
+$env:AUDIOSR_RUN_ROCM_FULL_INFERENCE = "1"
+$env:AUDIOSR_RUN_ROCM_HARDWARE = "1"
+$env:AUDIOSR_ROCM_DDIM_STEPS = "100"
+python -m pytest -q tests/test_rocm_hardware.py
+```
+
+The full-inference test is intentionally separate because it downloads a model of about 6.2 GB and requires substantially more memory than the kernel smoke test. If first-run MIOpen convolution tuning is too slow, setting `$env:MIOPEN_FIND_MODE = "FAST"` uses AMD's immediate fallback for faster startup at the cost of some GPU performance.
 
 ### Tuning and performance
 
