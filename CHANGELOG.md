@@ -6,6 +6,22 @@ The upstream project history before this fork remains available in the
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-08-25
+
+### Added
+
+- Added opt-in ROCm hardware smoke and full-inference tests for validating real
+  AMD GPU kernels and AudioSR's automatic device selection.
+- Included `requirements.txt` in source distributions so accelerator-specific
+  environments can reproduce the supported dependency ranges.
+
+### Changed
+
+- Lowered the PyTorch and TorchVision minimums to the current Windows ROCm 7.14
+  wheel family while retaining compatibility with newer CUDA and CPU wheels.
+- Documented Windows ROCm installation, HIP device semantics, and the Radeon
+  hardware verification procedure.
+
 ## [1.0.1] - 2026-08-25
 
 ### Changed

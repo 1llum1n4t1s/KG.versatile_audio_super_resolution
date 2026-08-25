@@ -178,7 +178,7 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
     assert captured["install_requires"] == namespace["REQUIRED"]
     assert captured["name"] == "kagayoi-audiosr"
     assert captured["python_requires"] == ">=3.10,<3.15"
-    assert captured["version"] == "1.0.1"
+    assert captured["version"] == "1.0.2"
     assert captured["url"] == "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
     assert captured["author_email"] == ""
     assert captured["maintainer"] == "Kagayoi"
