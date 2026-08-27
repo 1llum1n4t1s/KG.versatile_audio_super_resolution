@@ -69,6 +69,7 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
     fake_audiosr.build_model = build_model
     fake_audiosr.get_time = Mock(return_value="timestamp")
     fake_audiosr.read_list = read_list
+    fake_audiosr.restore_high_rate = Mock()
     fake_audiosr.save_wave = save_wave
     fake_audiosr.super_resolution = Mock()
     fake_audiosr.super_resolution_long_audio = super_resolution_long_audio
@@ -88,6 +89,12 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
             "cpu",
             "--ddim_steps",
             "17",
+            "--sampler",
+            "dpmpp2m",
+            "--ddim_eta",
+            "0.0",
+            "--discretize",
+            "trailing",
             "-gs",
             "4.25",
             "--seed",
@@ -112,6 +119,9 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
                 seed=99,
                 guidance_scale=4.25,
                 ddim_steps=17,
+                sampler="dpmpp2m",
+                ddim_eta=0.0,
+                discretize="trailing",
                 chunk_duration_s=11,
                 overlap_duration_s=3,
             ),
@@ -121,6 +131,9 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
                 seed=99,
                 guidance_scale=4.25,
                 ddim_steps=17,
+                sampler="dpmpp2m",
+                ddim_eta=0.0,
+                discretize="trailing",
                 chunk_duration_s=11,
                 overlap_duration_s=3,
             ),
@@ -138,6 +151,7 @@ def test_main_forwards_standard_processing_arguments(monkeypatch, tmp_path):
     fake_audiosr.build_model = build_model
     fake_audiosr.get_time = Mock(return_value="timestamp")
     fake_audiosr.read_list = Mock()
+    fake_audiosr.restore_high_rate = Mock()
     fake_audiosr.save_wave = Mock()
     fake_audiosr.super_resolution = super_resolution
     fake_audiosr.super_resolution_long_audio = Mock()
@@ -153,8 +167,25 @@ def test_main_forwards_standard_processing_arguments(monkeypatch, tmp_path):
         seed=42,
         guidance_scale=3.5,
         ddim_steps=50,
+        sampler="ddim",
+        ddim_eta=1.0,
+        discretize="uniform",
         latent_t_per_second=12.8,
     )
+
+
+def test_parser_rejects_unknown_sampler_and_negative_eta():
+    cli = load_cli_module()
+    parser = cli.build_parser()
+
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-i", "input.wav", "--sampler", "euler"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-i", "input.wav", "--ddim_eta", "-0.5"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-i", "input.wav", "--ddim_eta", "nan"])
+    with pytest.raises(SystemExit):
+        parser.parse_args(["-i", "input.wav", "--discretize", "leading"])
 
 
 def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
@@ -232,3 +263,118 @@ def test_legacy_preprocessing_exports_remain_available():
         "pad_wav",
     ):
         assert callable(getattr(audiosr, name))
+
+
+def _fake_audiosr(super_resolution, restore_high_rate, save_wave):
+    fake = ModuleType("audiosr")
+    fake.build_model = Mock(return_value="model")
+    fake.get_time = Mock(return_value="timestamp")
+    fake.read_list = Mock()
+    fake.restore_high_rate = restore_high_rate
+    fake.save_wave = save_wave
+    fake.super_resolution = super_resolution
+    fake.super_resolution_long_audio = Mock()
+    return fake
+
+
+def test_the_output_rate_defaults_to_the_model_rate(monkeypatch, tmp_path):
+    cli = load_cli_module()
+    save_wave = Mock()
+    restore_high_rate = Mock()
+    monkeypatch.setitem(
+        sys.modules,
+        "audiosr",
+        _fake_audiosr(Mock(return_value="waveform"), restore_high_rate, save_wave),
+    )
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(set_float32_matmul_precision=Mock())
+    )
+
+    assert cli.main(["-i", "input.wav", "-s", str(tmp_path)]) == 0
+
+    restore_high_rate.assert_not_called()
+    assert save_wave.call_args.kwargs["samplerate"] == 48000
+    assert save_wave.call_args.args[0] == "waveform"
+
+
+def test_preserve_input_rate_writes_at_the_rate_the_passthrough_reports(
+    monkeypatch, tmp_path
+):
+    """The input's own rate decides the output's, so the CLI must not assume."""
+    cli = load_cli_module()
+    save_wave = Mock()
+    restore_high_rate = Mock(return_value=("lifted", 96000))
+    monkeypatch.setitem(
+        sys.modules,
+        "audiosr",
+        _fake_audiosr(Mock(return_value="waveform"), restore_high_rate, save_wave),
+    )
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(set_float32_matmul_precision=Mock())
+    )
+
+    assert (
+        cli.main(["-i", "input.wav", "-s", str(tmp_path), "--preserve_input_rate"]) == 0
+    )
+
+    restore_high_rate.assert_called_once_with("waveform", "input.wav")
+    assert save_wave.call_args.args[0] == "lifted"
+    assert save_wave.call_args.kwargs["samplerate"] == 96000
+
+
+@pytest.mark.parametrize(
+    "sample_rate,expected",
+    [(48000, "_AudioSR_Processed_48K"), (96000, "_AudioSR_Processed_96K"),
+     (44100, "_AudioSR_Processed_44_1K"), (192000, "_AudioSR_Processed_192K")],
+)
+def test_the_default_suffix_names_the_rate_it_was_written_at(sample_rate, expected):
+    cli = load_cli_module()
+
+    assert cli.rate_suffix(sample_rate) == expected
+
+
+def test_the_default_suffix_follows_a_preserved_input_rate(monkeypatch, tmp_path):
+    """A 96 kHz result must not be named 48K."""
+    cli = load_cli_module()
+    save_wave = Mock()
+    monkeypatch.setitem(
+        sys.modules,
+        "audiosr",
+        _fake_audiosr(
+            Mock(return_value="waveform"), Mock(return_value=("lifted", 96000)), save_wave
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(set_float32_matmul_precision=Mock())
+    )
+
+    assert (
+        cli.main(["-i", "song.wav", "-s", str(tmp_path), "--preserve_input_rate"]) == 0
+    )
+
+    assert save_wave.call_args.kwargs["name"] == "song_AudioSR_Processed_96K"
+
+
+def test_an_explicit_suffix_is_left_alone(monkeypatch, tmp_path):
+    cli = load_cli_module()
+    save_wave = Mock()
+    monkeypatch.setitem(
+        sys.modules,
+        "audiosr",
+        _fake_audiosr(
+            Mock(return_value="waveform"), Mock(return_value=("lifted", 96000)), save_wave
+        ),
+    )
+    monkeypatch.setitem(
+        sys.modules, "torch", SimpleNamespace(set_float32_matmul_precision=Mock())
+    )
+
+    assert (
+        cli.main(
+            ["-i", "song.wav", "-s", str(tmp_path), "--preserve_input_rate",
+             "--suffix", "_mine"]
+        )
+        == 0
+    )
+
+    assert save_wave.call_args.kwargs["name"] == "song_mine"

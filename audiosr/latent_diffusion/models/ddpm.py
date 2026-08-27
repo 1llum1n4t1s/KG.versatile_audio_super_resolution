@@ -1,8 +1,8 @@
 from multiprocessing.sharedctypes import Value
 import os
-import librosa
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import numpy as np
 from einops import rearrange, repeat
 from contextlib import contextmanager
@@ -27,11 +27,27 @@ from audiosr.latent_diffusion.modules.diffusionmodules.util import (
 )
 
 from audiosr.latent_diffusion.models.ddim import DDIMSampler
-from audiosr.latent_diffusion.models.plms import PLMSSampler
+from audiosr.latent_diffusion.models.dpm_solver import DPMSolverSampler
+from audiosr.sampling import (
+    DEFAULT_DISCRETIZATION,
+    DEFAULT_SAMPLER,
+    SUPPORTED_SAMPLERS,
+    normalize_ddim_eta,
+    normalize_discretize,
+    normalize_sampler,
+)
 import soundfile as sf
 import os
 
 __conditioning_keys__ = {"concat": "c_concat", "crossattn": "c_crossattn", "adm": "y"}
+
+# Analysis parameters for the band-replacement stage. They match the librosa
+# defaults the stage was built against, so the crossover lands on the same
+# frequency bins as before.
+_BAND_REPLACE_N_FFT = 2048
+_BAND_REPLACE_HOP = _BAND_REPLACE_N_FFT // 4
+_BAND_REPLACE_ENERGY_PERCENTILE = 0.985
+_BAND_REPLACE_GAIN_LIMITS = (0.8, 1.2)
 
 
 def disabled_train(self, mode=True):
@@ -600,6 +616,7 @@ class LatentDiffusion(DDPM):
         evaluation_params={},
         scale_by_std=False,
         base_learning_rate=None,
+        share_first_stage_cond=(),
         *args,
         **kwargs,
     ):
@@ -655,6 +672,7 @@ class LatentDiffusion(DDPM):
         self.instantiate_first_stage(first_stage_config)
         self.unconditional_prob_cfg = unconditional_prob_cfg
         self.cond_stage_models = nn.ModuleList([])
+        self.share_first_stage_cond = tuple(share_first_stage_cond)
         self.instantiate_cond_stage(cond_stage_config)
         self.cond_stage_forward = cond_stage_forward
         self.clip_denoised = False
@@ -767,7 +785,16 @@ class LatentDiffusion(DDPM):
                 and "device" in config[cond_model_key]["params"]
             ):
                 config[cond_model_key]["params"]["device"] = self.device
-            model = instantiate_from_config(config[cond_model_key])
+            model_config = config[cond_model_key]
+            if cond_model_key in self.share_first_stage_cond:
+                # The checkpoint stores this stage's VAE weights and the first
+                # stage's as the same tensors, so the first stage module serves
+                # both and the second copy is never built.
+                params = dict(model_config.get("params", {}))
+                params.pop("first_stage_config", None)
+                params["shared_vae"] = self.first_stage_model
+                model_config = dict(model_config, params=params)
+            model = instantiate_from_config(model_config)
             model = model.to(self.device)
             self.cond_stage_models.append(model)
             self.cond_stage_model_metadata[cond_model_key] = {
@@ -830,6 +857,11 @@ class LatentDiffusion(DDPM):
         if return_first_stage_encode:
             encoder_posterior = self.encode_first_stage(x)
             z = self.get_first_stage_encoding(encoder_posterior).detach()
+        elif return_decoding_output or return_encoder_output:
+            raise ValueError(
+                "return_decoding_output and return_encoder_output require "
+                "return_first_stage_encode"
+            )
         else:
             z = None
         cond_dict = {}
@@ -918,10 +950,11 @@ class LatentDiffusion(DDPM):
         if len(mel.size()) == 4:
             mel = mel.squeeze(1)
         mel = mel.permute(0, 2, 1)
-        waveform = self.first_stage_model.vocoder(mel)
-        waveform = waveform.cpu().detach().numpy()
+        # The waveform stays a tensor so band replacement can run on the same
+        # device instead of round-tripping every item through NumPy.
+        waveform = self.first_stage_model.vocoder(mel).detach()
         if save:
-            self.save_waveform(waveform, savepath, name)
+            self.save_waveform(waveform.cpu().numpy(), savepath, name)
         return waveform
 
     def encode_first_stage(self, x):
@@ -1406,49 +1439,37 @@ class LatentDiffusion(DDPM):
         self,
         cond,
         batch_size,
-        ddim,
         ddim_steps,
+        sampler=DEFAULT_SAMPLER,
+        ddim_eta=1.0,
+        discretize=DEFAULT_DISCRETIZATION,
         unconditional_guidance_scale=1.0,
         unconditional_conditioning=None,
-        use_plms=False,
         mask=None,
         **kwargs,
     ):
+        """Draw latent samples with the requested sampler.
+
+        ``ddim_eta`` selects how stochastic the ancestral update is and applies
+        to the ``ddim`` sampler only; ``dpmpp2m`` integrates the deterministic
+        probability-flow ODE and has no stochastic term.
+
+        ``discretize`` selects the timestep spacing. ``uniform`` reproduces the
+        established schedule but reaches the noisiest timestep only when the
+        step count does not divide the training schedule; ``trailing`` always
+        reaches it.
+        """
         if mask is not None:
             shape = (self.channels, mask.size()[-2], mask.size()[-1])
         else:
             shape = (self.channels, self.latent_t_size, self.latent_f_size)
 
-        intermediate = None
-        if ddim and not use_plms:
-            ddim_sampler = DDIMSampler(self, device=self.device)
-            samples, intermediates = ddim_sampler.sample(
-                ddim_steps,
-                batch_size,
-                shape,
-                cond,
-                verbose=False,
-                unconditional_guidance_scale=unconditional_guidance_scale,
-                unconditional_conditioning=unconditional_conditioning,
-                mask=mask,
-                **kwargs,
-            )
-        elif use_plms:
-            plms_sampler = PLMSSampler(self)
-            samples, intermediates = plms_sampler.sample(
-                ddim_steps,
-                batch_size,
-                shape,
-                cond,
-                verbose=False,
-                unconditional_guidance_scale=unconditional_guidance_scale,
-                mask=mask,
-                unconditional_conditioning=unconditional_conditioning,
-                **kwargs,
-            )
+        sampler_name = normalize_sampler(sampler)
+        ddim_eta = normalize_ddim_eta(ddim_eta)
+        discretize = normalize_discretize(discretize)
 
-        else:
-            samples, intermediates = self.sample(
+        if sampler_name == "ddpm":
+            samples, _ = self.sample(
                 cond=cond,
                 batch_size=batch_size,
                 return_intermediates=True,
@@ -1457,8 +1478,55 @@ class LatentDiffusion(DDPM):
                 unconditional_conditioning=unconditional_conditioning,
                 **kwargs,
             )
+            return samples, None
 
-        return samples, intermediate
+        if ddim_steps is None:
+            raise ValueError(f"the {sampler_name!r} sampler requires ddim_steps")
+
+        if sampler_name == "ddim":
+            sampler_object = DDIMSampler(self, device=self.betas.device)
+            sampler_kwargs = {
+                "eta": ddim_eta,
+                "ddim_discretize": discretize,
+                "return_intermediates": False,
+                "fuse_cfg": batch_size <= 2,
+            }
+        else:
+            sampler_object = DPMSolverSampler(self, device=self.betas.device)
+            sampler_kwargs = {
+                "ddim_discretize": discretize,
+                "return_intermediates": False,
+                "fuse_cfg": batch_size <= 2,
+            }
+
+        samples, _ = sampler_object.sample(
+            ddim_steps,
+            batch_size,
+            shape,
+            cond,
+            verbose=False,
+            unconditional_guidance_scale=unconditional_guidance_scale,
+            unconditional_conditioning=unconditional_conditioning,
+            mask=mask,
+            **sampler_kwargs,
+            **kwargs,
+        )
+        return samples, None
+
+    def _conditioning_latent_reference(self, cond_dict):
+        """Return the conditioning latent that defines the diffusion sample shape.
+
+        Super-resolution conditions on a spectrogram with the same dimensions as
+        the target, encoded by an identically configured autoencoder, so this
+        latent carries the batch size and time extent the sampler needs.
+        """
+        for key, value in cond_dict.items():
+            if "concat" in key and isinstance(value, torch.Tensor) and value.dim() == 4:
+                return value
+        raise RuntimeError(
+            "generation requires a concatenated conditioning latent to size the "
+            "diffusion sample"
+        )
 
     @torch.no_grad()
     def generate_batch(
@@ -1470,34 +1538,33 @@ class LatentDiffusion(DDPM):
         n_gen=1,
         unconditional_guidance_scale=1.0,
         unconditional_conditioning=None,
-        use_plms=False,
+        sampler=DEFAULT_SAMPLER,
+        discretize=DEFAULT_DISCRETIZATION,
         **kwargs,
     ):
-        # Generate n_gen times and select the best
         # Batch: audio, text, fnames
         assert x_T is None
 
-        if use_plms:
-            assert ddim_steps is not None
+        # The target spectrogram's own latent is never used during generation:
+        # sampling starts from noise and only the conditioning latent enters the
+        # network. Skipping that encoder pass removes one full first-stage
+        # forward per call.
+        _z, c = self.get_input(
+            batch,
+            self.first_stage_key,
+            return_first_stage_encode=False,
+            unconditional_prob_cfg=0.0,  # Do not output unconditional information in the c
+        )
 
-        use_ddim = ddim_steps is not None
+        c = self.filter_useful_cond_dict(c)
 
-        # with self.ema_scope("Plotting"):
-        for i in range(1):
-            z, c = self.get_input(
-                batch,
-                self.first_stage_key,
-                unconditional_prob_cfg=0.0,  # Do not output unconditional information in the c
-            )
-            self.latent_t_size = z.size(-2)
+        latent_reference = self._conditioning_latent_reference(c)
+        self.latent_t_size = latent_reference.size(-2)
 
-            c = self.filter_useful_cond_dict(c)
-
-            # Generate multiple samples
-            batch_size = z.shape[0] * n_gen
-
-            # Generate multiple samples at a time and filter out the best
-            # The condition to the diffusion wrapper can have many format
+        # Generate multiple samples at a time and filter out the best
+        # The condition to the diffusion wrapper can have many format
+        batch_size = latent_reference.size(0) * n_gen
+        if n_gen > 1:
             for cond_key in c.keys():
                 if isinstance(c[cond_key], list):
                     for i in range(len(c[cond_key])):
@@ -1508,102 +1575,153 @@ class LatentDiffusion(DDPM):
                 else:
                     c[cond_key] = torch.cat([c[cond_key]] * n_gen, dim=0)
 
-            if unconditional_guidance_scale != 1.0:
-                unconditional_conditioning = {}
-                for key in self.cond_stage_model_metadata:
-                    model_idx = self.cond_stage_model_metadata[key]["model_idx"]
-                    unconditional_conditioning[key] = self.cond_stage_models[
-                        model_idx
-                    ].get_unconditional_condition(batch_size)
+        if unconditional_guidance_scale != 1.0:
+            unconditional_conditioning = {}
+            for key in self.cond_stage_model_metadata:
+                model_idx = self.cond_stage_model_metadata[key]["model_idx"]
+                unconditional_conditioning[key] = self.cond_stage_models[
+                    model_idx
+                ].get_unconditional_condition(batch_size)
 
-            samples, _ = self.sample_log(
-                cond=c,
-                batch_size=batch_size,
-                x_T=x_T,
-                ddim=use_ddim,
-                ddim_steps=ddim_steps,
-                eta=ddim_eta,
-                unconditional_guidance_scale=unconditional_guidance_scale,
-                unconditional_conditioning=unconditional_conditioning,
-                use_plms=use_plms,
-            )
+        samples, _ = self.sample_log(
+            cond=c,
+            batch_size=batch_size,
+            x_T=x_T,
+            ddim_steps=ddim_steps,
+            sampler=sampler,
+            ddim_eta=ddim_eta,
+            discretize=discretize,
+            unconditional_guidance_scale=unconditional_guidance_scale,
+            unconditional_conditioning=unconditional_conditioning,
+        )
 
-            mel = self.decode_first_stage(samples)
+        mel = self.decode_first_stage(samples)
 
-            mel = self.mel_replace_ops(mel, super().get_input(batch, "lowpass_mel"))
+        lowpass_mel = super().get_input(batch, "lowpass_mel")
+        mel = self.mel_replace_ops(mel, lowpass_mel)
 
-            waveform = self.mel_spectrogram_to_waveform(
-                mel, savepath="", bs=None, save=False
-            )
+        waveform = self.mel_spectrogram_to_waveform(
+            mel, savepath="", bs=None, save=False
+        )
 
-            waveform_lowpass = super().get_input(batch, "waveform_lowpass")
-            waveform = self.postprocessing(waveform, waveform_lowpass)
+        waveform_lowpass = super().get_input(batch, "waveform_lowpass")
+        waveform = self.postprocessing(waveform, waveform_lowpass)
 
-            waveform = np.nan_to_num(
-                waveform, nan=0.0, posinf=1.0, neginf=-1.0
-            )
-            max_amp = np.max(np.abs(waveform), axis=-1)
-            waveform = 0.5 * waveform / np.maximum(max_amp[..., None], 1e-8)
-            mean_amp = np.mean(waveform, axis=-1)[..., None]
-            waveform = waveform - mean_amp
+        waveform = torch.nan_to_num(waveform, nan=0.0, posinf=1.0, neginf=-1.0)
+        max_amp = waveform.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8)
+        waveform = 0.5 * waveform / max_amp
+        waveform = waveform - waveform.mean(dim=-1, keepdim=True)
+        return waveform.cpu().numpy()
 
-            return waveform
+    @staticmethod
+    def _cutoff_index(energy, percentile=_BAND_REPLACE_ENERGY_PERCENTILE):
+        """Locate the highest bin still below ``percentile`` of the total energy.
 
-    def _locate_cutoff_freq(self, stft, percentile=0.985):
-        def _find_cutoff(x, percentile=0.95):
-            percentile = x[-1] * percentile
-            for i in range(1, x.shape[0]):
-                if x[-i] < percentile:
-                    return x.shape[0] - i
-            return 0
-
-        magnitude = torch.abs(stft)
-        energy = torch.cumsum(torch.sum(magnitude, dim=0), dim=0)
-        return _find_cutoff(energy, percentile)
+        ``energy`` is a cumulative sum over bins, so the bins below the threshold
+        form a prefix and its length gives the crossover directly. Index 0 is
+        never reported as a crossover, matching the scan this replaces.
+        """
+        threshold = energy[..., -1:] * percentile
+        below = (energy < threshold).sum(dim=-1)
+        return (below.clamp_min(1) - 1).long()
 
     def mel_replace_ops(self, samples, input):
-        for i in range(samples.size(0)):
-            cutoff_melbin = self._locate_cutoff_freq(torch.exp(input[i]))
+        """Substitute the source mel bins below the crossover into ``samples``.
 
-            # ratio = samples[i][...,:cutoff_melbin]/input[i][...,:cutoff_melbin]
-            # print(torch.mean(ratio), torch.max(ratio), torch.min(ratio))
+        The conditioning batch reaches this stage on the host, so the source mel
+        is aligned to the generated sample first.
+        """
+        input = input.to(device=samples.device, dtype=samples.dtype)
+        energy = torch.cumsum(torch.sum(torch.exp(input), dim=-2), dim=-1)
+        cutoff = self._cutoff_index(energy).reshape(-1, 1, 1)
+        bins = torch.arange(input.size(-1), device=input.device).reshape(1, 1, -1)
+        replace = bins < cutoff
 
-            samples[i][..., :cutoff_melbin] = input[i][..., :cutoff_melbin]
+        samples[:, 0] = torch.where(replace, input, samples[:, 0])
         return samples
 
+    def _band_replace_stft(self, waveform, window):
+        return torch.stft(
+            waveform,
+            n_fft=_BAND_REPLACE_N_FFT,
+            hop_length=_BAND_REPLACE_HOP,
+            win_length=_BAND_REPLACE_N_FFT,
+            window=window,
+            center=True,
+            pad_mode="constant",
+            return_complex=True,
+        )
+
     def postprocessing(self, out_batch, x_batch):  # x is target
-        # Replace the low resolution part with the ground truth
-        for i in range(out_batch.shape[0]):
-            out = out_batch[i, 0]
-            x = x_batch[i, 0].cpu().numpy()
-            cutoffratio = self._get_cutoff_index_np(x)
+        """Replace the generated low band with the source band, level matched.
 
-            length = out.shape[0]
-            stft_gt = librosa.stft(x)
-
-            stft_out = librosa.stft(out)
-            energy_ratio = np.mean(
-                np.sum(np.abs(stft_gt[cutoffratio]))
-                / np.sum(np.abs(stft_out[cutoffratio, ...]))
+        The whole batch is transformed at once on the device that produced the
+        waveform, so no item is round-tripped through a per-item CPU transform.
+        """
+        generated = torch.as_tensor(out_batch)
+        if generated.dim() != 3 or generated.size(1) != 1:
+            raise ValueError(
+                "generated waveforms must have shape [batch, 1, samples], got "
+                f"{tuple(generated.shape)}"
             )
-            energy_ratio = min(max(energy_ratio, 0.8), 1.2)
-            stft_out[:cutoffratio, ...] = stft_gt[:cutoffratio, ...] / energy_ratio
+        source = torch.as_tensor(x_batch).to(
+            device=generated.device, dtype=generated.dtype
+        )
+        if source.dim() != 3 or source.size(1) != 1:
+            raise ValueError(
+                "source waveforms must have shape [batch, 1, samples], got "
+                f"{tuple(source.shape)}"
+            )
+        if source.size(0) != generated.size(0):
+            raise ValueError(
+                "source and generated waveforms must have the same batch size, got "
+                f"{source.size(0)} and {generated.size(0)}"
+            )
 
-            out_renewed = librosa.istft(stft_out, length=length)
-            out_batch[i] = out_renewed
-        return out_batch
+        # The vocoder's transposed convolutions overshoot the conditioning length
+        # by a fraction of one hop, so the source is aligned to the generated
+        # length before analysis. Padding with zeros matches what the centred
+        # transform already appends past the end of the signal.
+        length = generated.size(-1)
+        if source.size(-1) < length:
+            source = F.pad(source, (0, length - source.size(-1)))
+        elif source.size(-1) > length:
+            source = source[..., :length]
+        window = torch.hann_window(
+            _BAND_REPLACE_N_FFT, periodic=True, device=generated.device, dtype=generated.dtype
+        )
+        stft_source = self._band_replace_stft(source[:, 0], window)
+        stft_generated = self._band_replace_stft(generated[:, 0], window)
 
-    def _find_cutoff_np(self, x, threshold=0.95):
-        threshold = x[-1] * threshold
-        for i in range(1, x.shape[0]):
-            if x[-i] < threshold:
-                return x.shape[0] - i
-        return 0
+        magnitude_source = stft_source.abs()
+        energy = torch.cumsum(torch.sum(magnitude_source, dim=-1), dim=-1)
+        cutoff = self._cutoff_index(energy).reshape(-1, 1)
 
-    def _get_cutoff_index_np(self, x):
-        stft_x = np.abs(librosa.stft(x))
-        energy = np.cumsum(np.sum(stft_x, axis=-1))
-        return self._find_cutoff_np(energy, 0.985)
+        bins = torch.arange(stft_source.size(-2), device=generated.device).reshape(1, -1)
+        # The crossover bin itself is the level reference, as it is the lowest
+        # bin the model still generates in full.
+        reference = (bins == cutoff).unsqueeze(-1)
+        source_level = (magnitude_source * reference).sum(dim=(-2, -1))
+        generated_level = (stft_generated.abs() * reference).sum(dim=(-2, -1))
+        gain = (source_level / generated_level.clamp_min(1e-8)).clamp(
+            *_BAND_REPLACE_GAIN_LIMITS
+        )
+
+        replace = (bins < cutoff).unsqueeze(-1)
+        merged = torch.where(
+            replace, stft_source / gain.reshape(-1, 1, 1), stft_generated
+        )
+
+        renewed = torch.istft(
+            merged,
+            n_fft=_BAND_REPLACE_N_FFT,
+            hop_length=_BAND_REPLACE_HOP,
+            win_length=_BAND_REPLACE_N_FFT,
+            window=window,
+            center=True,
+            length=length,
+        )
+        return renewed.unsqueeze(1)
 
 
 class DiffusionWrapper(nn.Module):

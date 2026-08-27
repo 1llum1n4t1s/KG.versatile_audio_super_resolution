@@ -117,11 +117,28 @@ class PhonemeEncoder(nn.Module):
 
 
 class VAEFeatureExtract(nn.Module):
-    def __init__(self, first_stage_config):
+    """Encode the conditioning mel with a VAE.
+
+    The VAE is either built from ``first_stage_config`` or supplied ready-made
+    through ``shared_vae``. The released checkpoints store the same weights both
+    here and under the diffusion model's own first stage, and passing that one
+    module in avoids building and holding a second copy of it.
+    """
+
+    def __init__(self, first_stage_config=None, shared_vae=None):
         super().__init__()
         # self.tokenizer = AutoTokenizer.from_pretrained("gpt2")
+        if (first_stage_config is None) == (shared_vae is None):
+            raise ValueError(
+                "VAEFeatureExtract needs exactly one of first_stage_config or "
+                "shared_vae"
+            )
         self.vae = None
-        self.instantiate_first_stage(first_stage_config)
+        if shared_vae is None:
+            self.instantiate_first_stage(first_stage_config)
+        else:
+            # An alias rather than a copy, so both names reach one module.
+            self.vae = shared_vae
         self.device = None
         self.unconditional_cond = None
 

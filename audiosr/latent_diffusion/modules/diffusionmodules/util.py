@@ -63,7 +63,17 @@ def make_ddim_timesteps(
         )
 
     num_ddim_timesteps = int(num_ddim_timesteps)
-    if ddim_discr_method == "uniform":
+    if ddim_discr_method == "trailing":
+        # Anchor the schedule to the noisiest timestep. "uniform" reaches it
+        # only when the step count does not divide the training schedule, and
+        # sampling starts from pure noise, so a schedule that stops short leaves
+        # a signal component the sampler never accounts for.
+        stride = num_ddpm_timesteps / num_ddim_timesteps
+        steps_out = (
+            np.round(np.arange(num_ddpm_timesteps, 0, -stride)).astype(np.int64) - 1
+        )[::-1].copy()
+        steps_out = np.clip(steps_out, 0, num_ddpm_timesteps - 1)
+    elif ddim_discr_method == "uniform":
         c = num_ddpm_timesteps // num_ddim_timesteps
         legacy_timesteps = np.arange(0, num_ddpm_timesteps, c, dtype=np.int64) + 1
         if (
@@ -196,7 +206,9 @@ class CheckpointFunction(torch.autograd.Function):
         return (None, None) + input_grads
 
 
-def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
+def timestep_embedding(
+    timesteps, dim, max_period=10000, repeat_only=False, frequencies=None
+):
     """
     Create sinusoidal timestep embeddings.
     :param timesteps: a 1-D Tensor of N indices, one per batch element.
@@ -207,11 +219,18 @@ def timestep_embedding(timesteps, dim, max_period=10000, repeat_only=False):
     """
     if not repeat_only:
         half = dim // 2
-        freqs = torch.exp(
-            -math.log(max_period)
-            * torch.arange(start=0, end=half, dtype=torch.float32)
-            / half
-        ).to(device=timesteps.device)
+        if frequencies is None:
+            freqs = torch.exp(
+                -math.log(max_period)
+                * torch.arange(start=0, end=half, dtype=torch.float32)
+                / half
+            ).to(device=timesteps.device)
+        else:
+            if frequencies.shape != (half,):
+                raise ValueError("frequencies must match half the embedding dimension")
+            freqs = frequencies
+            if freqs.device != timesteps.device or freqs.dtype != torch.float32:
+                freqs = freqs.to(device=timesteps.device, dtype=torch.float32)
         args = timesteps[:, None].float() * freqs[None]
         embedding = torch.cat([torch.cos(args), torch.sin(args)], dim=-1)
         if dim % 2:

@@ -10,6 +10,13 @@ import torch.nn.functional as F
 
 import audiosr.latent_diffusion.modules.phoneme_encoder.text as text
 from audiosr.latent_diffusion.models.ddpm import LatentDiffusion
+from audiosr.sampling import (
+    DEFAULT_DISCRETIZATION,
+    DEFAULT_SAMPLER,
+    normalize_ddim_eta,
+    normalize_discretize,
+    normalize_sampler,
+)
 from audiosr.utils import (
     _select_lowpass_filter_type,
     default_audioldm_config,
@@ -189,6 +196,72 @@ def round_up_duration(duration):
     return int(round(duration / 2.5) + 1) * 2.5
 
 
+_VAE_FEATURE_EXTRACT = (
+    "audiosr.latent_diffusion.modules.encoders.modules.VAEFeatureExtract"
+)
+
+
+def _read_state_dict(ckpt_path):
+    if os.fsdecode(ckpt_path).lower().endswith(".safetensors"):
+        from safetensors.torch import load_file
+
+        checkpoint = load_file(ckpt_path, device="cpu")
+    else:
+        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
+
+    if isinstance(checkpoint, Mapping) and "state_dict" in checkpoint:
+        return checkpoint["state_dict"]
+    return checkpoint
+
+
+def _tensors_match(left, right):
+    if right is None or left.shape != right.shape or left.dtype != right.dtype:
+        return False
+    return bool(torch.equal(left, right))
+
+
+def duplicated_first_stage_cond(config, state_dict):
+    """Report conditioning stages whose weights repeat the first stage's.
+
+    AudioSR conditions on a VAE encode of the low band, and configures that VAE
+    a second time inside the conditioning stage. In the released checkpoints
+    both copies are the same tensors, so one module can answer for both names
+    and the duplicate is never built, moved to the accelerator, or held.
+
+    The decision comes from the checkpoint rather than from the configuration,
+    because two stages can be configured alike and still have been trained
+    apart. A checkpoint whose copies differ keeps the separate modules it needs.
+
+    Returns the conditioning stage keys that can share, together with the
+    checkpoint keys that become redundant once they do.
+    """
+    prefix = "first_stage_model."
+    first_stage = {
+        key[len(prefix) :]: value
+        for key, value in state_dict.items()
+        if key.startswith(prefix)
+    }
+    if not first_stage:
+        return (), ()
+
+    shared, redundant = [], []
+    cond_stage_config = config["model"]["params"].get("cond_stage_config") or {}
+    for index, cond_key in enumerate(cond_stage_config):
+        if cond_stage_config[cond_key].get("target") != _VAE_FEATURE_EXTRACT:
+            continue
+        cond_prefix = f"cond_stage_models.{index}.vae."
+        cond_keys = [key for key in state_dict if key.startswith(cond_prefix)]
+        if len(cond_keys) != len(first_stage):
+            continue
+        if all(
+            _tensors_match(state_dict[key], first_stage.get(key[len(cond_prefix) :]))
+            for key in cond_keys
+        ):
+            shared.append(cond_key)
+            redundant.extend(cond_keys)
+    return tuple(shared), tuple(redundant)
+
+
 def build_model(ckpt_path=None, config=None, device=None, model_name="basic"):
     if device is None or device == "auto":
         if torch.cuda.is_available():
@@ -218,20 +291,16 @@ def build_model(ckpt_path=None, config=None, device=None, model_name="basic"):
     config["model"]["params"]["device"] = device
     # config["model"]["params"]["cond_stage_key"] = "text"
 
+    # The checkpoint is read before the model is built so the duplicated
+    # conditioning VAE can be dropped from both the weights and the model.
+    state_dict = _read_state_dict(ckpt_path)
+    shared, redundant = duplicated_first_stage_cond(config, state_dict)
+    for key in redundant:
+        del state_dict[key]
+    config["model"]["params"]["share_first_stage_cond"] = shared
+
     # No normalization here
     latent_diffusion = LatentDiffusion(**config["model"]["params"])
-
-    if os.fsdecode(ckpt_path).lower().endswith(".safetensors"):
-        from safetensors.torch import load_file
-
-        checkpoint = load_file(ckpt_path, device="cpu")
-    else:
-        checkpoint = torch.load(ckpt_path, map_location="cpu", weights_only=True)
-
-    if isinstance(checkpoint, Mapping) and "state_dict" in checkpoint:
-        state_dict = checkpoint["state_dict"]
-    else:
-        state_dict = checkpoint
     latent_diffusion.load_state_dict(state_dict, strict=False)
 
     latent_diffusion.eval()
@@ -292,6 +361,213 @@ def _fade_pair(overlap_samples, dtype=torch.float32):
     return window[:overlap_samples], window[overlap_samples:]
 
 
+def _is_accelerator_out_of_memory(error):
+    return isinstance(error, RuntimeError) and "out of memory" in str(error).lower()
+
+
+def _clear_accelerator_cache():
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+
+
+def _generate_long_audio_batch(
+    latent_diffusion,
+    chunks,
+    seed,
+    lowpass_seed,
+    ddim_steps,
+    guidance_scale,
+    sampler=DEFAULT_SAMPLER,
+    ddim_eta=1.0,
+    discretize=DEFAULT_DISCRETIZATION,
+):
+    """Generate one chunk group and retry as single items after accelerator OOM."""
+    try:
+        return super_resolution_batch(
+            latent_diffusion,
+            chunks,
+            seed=seed,
+            lowpass_seed=lowpass_seed,
+            ddim_steps=ddim_steps,
+            guidance_scale=guidance_scale,
+            sampler=sampler,
+            ddim_eta=ddim_eta,
+            discretize=discretize,
+        )
+    except RuntimeError as error:
+        if len(chunks) <= 1 or not _is_accelerator_out_of_memory(error):
+            raise
+
+        _clear_accelerator_cache()
+        generated = []
+        for offset, chunk in enumerate(chunks):
+            generated.extend(
+                super_resolution_batch(
+                    latent_diffusion,
+                    [chunk],
+                    seed=int(seed) + offset,
+                    lowpass_seed=lowpass_seed,
+                    ddim_steps=ddim_steps,
+                    guidance_scale=guidance_scale,
+                    sampler=sampler,
+                    ddim_eta=ddim_eta,
+                    discretize=discretize,
+                )
+            )
+        return generated
+
+
+def _blend_long_audio_chunk(
+    final_waveform,
+    contribution_map,
+    channel_index,
+    start_sample,
+    end_sample,
+    overlap_samples,
+    processed,
+    original_peak,
+):
+    current_chunk_len = end_sample - start_sample
+    processed = _trim_or_pad(processed, current_chunk_len)
+    processed_peak = torch.max(torch.abs(processed)) + 1e-8
+    processed = (processed / processed_peak) * original_peak
+
+    left_overlap = min(overlap_samples, current_chunk_len) if start_sample > 0 else 0
+    right_overlap = (
+        min(overlap_samples, current_chunk_len)
+        if end_sample < final_waveform.shape[-1]
+        else 0
+    )
+    if left_overlap:
+        fade_in, _ = _fade_pair(left_overlap, processed.dtype)
+        processed[:left_overlap] *= fade_in
+    if right_overlap:
+        _, fade_out = _fade_pair(right_overlap, processed.dtype)
+        processed[-right_overlap:] *= fade_out
+
+    final_waveform[0, channel_index, start_sample:end_sample] += processed
+    contribution = torch.ones(current_chunk_len, dtype=processed.dtype)
+    if left_overlap:
+        contribution[:left_overlap] *= _fade_pair(left_overlap, processed.dtype)[0]
+    if right_overlap:
+        contribution[-right_overlap:] *= _fade_pair(right_overlap, processed.dtype)[1]
+    contribution_map[0, channel_index, start_sample:end_sample] += contribution
+
+
+_HIGH_RATE_N_FFT = 4096
+_HIGH_RATE_HOP = _HIGH_RATE_N_FFT // 4
+_MODEL_NYQUIST_HZ = _SAMPLE_RATE // 2
+
+
+def _level_match_gain(source, reference, floor=1e-12):
+    """Return the gain that puts ``source`` at ``reference``'s overall level."""
+    source_power = float(torch.mean(source.double() ** 2))
+    reference_power = float(torch.mean(reference.double() ** 2))
+    if source_power <= floor:
+        return 1.0
+    return (reference_power / source_power) ** 0.5
+
+
+def restore_high_rate(generated, source_file, target_sample_rate=None):
+    """Return the restoration at the source's rate, keeping the source's top band.
+
+    The model works at 48 kHz, so a source recorded above that loses everything
+    over 24 kHz on the way in and the restoration comes back at 48 kHz.
+    Resampling it up recreates the rate but leaves that band empty, so the
+    source's own content above 24 kHz is put back: the same splice the model
+    already performs at the low end, applied at the top.
+
+    Nothing is invented. The band above 24 kHz either came from the source or
+    stays empty, and on real recordings it usually holds only the noise floor —
+    a 96 kHz 24-bit solo piano recording measures a flat -91 dB up there. What
+    this preserves is the source's rate and whatever it genuinely carried, not
+    added bandwidth.
+
+    Returns the waveform as ``[1, channels, samples]`` together with its rate.
+    """
+    import torchaudio
+
+    restored = _as_generated_tensor(generated)
+    if restored.dim() == 3:
+        if restored.size(0) != 1:
+            raise ValueError(
+                "generated must hold a single item, got batch of "
+                f"{restored.size(0)}"
+            )
+        restored = restored[0]
+    if restored.dim() != 2:
+        raise ValueError(
+            "generated must have shape [channels, samples] or "
+            f"[1, channels, samples], got {tuple(restored.shape)}"
+        )
+
+    source, source_rate = load_audio(source_file)
+    target = int(source_rate if target_sample_rate is None else target_sample_rate)
+    if target <= 0:
+        raise ValueError("target_sample_rate must be positive")
+    if source.size(0) != restored.size(0):
+        raise ValueError(
+            f"the source has {source.size(0)} channels but the restoration has "
+            f"{restored.size(0)}"
+        )
+
+    if target != _SAMPLE_RATE:
+        restored = torchaudio.functional.resample(
+            restored, orig_freq=_SAMPLE_RATE, new_freq=target
+        )
+    if target <= _SAMPLE_RATE:
+        # The source held nothing above the model's own Nyquist, so the rate
+        # change is the whole of the work.
+        return restored.unsqueeze(0).cpu().numpy(), target
+
+    if source_rate != target:
+        source = torchaudio.functional.resample(
+            source, orig_freq=source_rate, new_freq=target
+        )
+
+    # The source file decides the length, since that is what the caller handed
+    # in; resampling rounds the restoration to within a sample or two of it.
+    length = source.size(-1)
+    if restored.size(-1) < length:
+        restored = torch.nn.functional.pad(restored, (0, length - restored.size(-1)))
+    else:
+        restored = restored[..., :length]
+
+    # The model level-matches its output to the source, but not exactly, so the
+    # band being spliced in is put on the restoration's scale first. Overall
+    # level is dominated by the low end, where the two already agree.
+    source = source * _level_match_gain(source, restored)
+
+    window = torch.hann_window(_HIGH_RATE_N_FFT, periodic=True, dtype=restored.dtype)
+    spectrum = torch.stft(
+        restored,
+        n_fft=_HIGH_RATE_N_FFT,
+        hop_length=_HIGH_RATE_HOP,
+        window=window,
+        center=True,
+        return_complex=True,
+    )
+    source_spectrum = torch.stft(
+        source,
+        n_fft=_HIGH_RATE_N_FFT,
+        hop_length=_HIGH_RATE_HOP,
+        window=window,
+        center=True,
+        return_complex=True,
+    )
+    crossover = int(_MODEL_NYQUIST_HZ * _HIGH_RATE_N_FFT / target)
+    spectrum[:, crossover + 1 :] = source_spectrum[:, crossover + 1 :]
+    output = torch.istft(
+        spectrum,
+        n_fft=_HIGH_RATE_N_FFT,
+        hop_length=_HIGH_RATE_HOP,
+        window=window,
+        center=True,
+        length=length,
+    )
+    return output.unsqueeze(0).cpu().numpy(), target
+
+
 def super_resolution(
     latent_diffusion,
     input_file,
@@ -300,7 +576,13 @@ def super_resolution(
     guidance_scale=3.5,
     latent_t_per_second=12.8,
     config=None,
+    sampler=DEFAULT_SAMPLER,
+    ddim_eta=1.0,
+    discretize=DEFAULT_DISCRETIZATION,
 ):
+    sampler = normalize_sampler(sampler)
+    ddim_eta = normalize_ddim_eta(ddim_eta)
+    discretize = normalize_discretize(discretize)
     waveform, sampling_rate = load_audio(input_file, target_sample_rate=_SAMPLE_RATE)
     if sampling_rate != _SAMPLE_RATE:
         raise ValueError(f"load_audio returned {sampling_rate} Hz; expected {_SAMPLE_RATE} Hz")
@@ -320,12 +602,14 @@ def super_resolution(
         batch, duration = make_batch_for_super_resolution(
             None, waveform=channel.detach().cpu().numpy()
         )
-        with torch.no_grad():
+        with torch.inference_mode():
             generated = latent_diffusion.generate_batch(
                 batch,
                 unconditional_guidance_scale=guidance_scale,
                 ddim_steps=ddim_steps,
-                duration=duration,
+                sampler=sampler,
+                ddim_eta=ddim_eta,
+                discretize=discretize,
             )
         outputs.append(_trim_or_pad(_extract_single_generated(generated), original_samples))
 
@@ -340,16 +624,26 @@ def super_resolution_long_audio(
     guidance_scale=3.5,
     chunk_duration_s=15,
     overlap_duration_s=2,
+    batch_size=1,
+    sampler=DEFAULT_SAMPLER,
+    ddim_eta=1.0,
+    discretize=DEFAULT_DISCRETIZATION,
 ):
     """
     Process a multi-channel file in overlapping chunks and return [1, C, T].
     """
+    sampler = normalize_sampler(sampler)
+    ddim_eta = normalize_ddim_eta(ddim_eta)
+    discretize = normalize_discretize(discretize)
     if chunk_duration_s <= 0 or overlap_duration_s < 0:
         raise ValueError(
             "chunk_duration_s must be positive and overlap_duration_s non-negative"
         )
     if overlap_duration_s >= chunk_duration_s:
         raise ValueError("overlap_duration_s must be less than chunk_duration_s")
+    if not isinstance(batch_size, (int, np.integer)) or not 1 <= int(batch_size) <= 8:
+        raise ValueError("batch_size must be an integer between 1 and 8")
+    batch_size = int(batch_size)
 
     waveform, sampling_rate = load_audio(input_file, target_sample_rate=_SAMPLE_RATE)
     if sampling_rate != _SAMPLE_RATE:
@@ -380,46 +674,72 @@ def super_resolution_long_audio(
         # reproducible across channels.
         seed_everything(int(seed))
         lowpass_filter_type = _select_lowpass_filter_type()
+        chunk_records = []
         for start_sample in range(0, total_samples, step_samples):
             end_sample = min(start_sample + chunk_samples, total_samples)
-            current_chunk_len = end_sample - start_sample
             chunk = waveform[channel_index, start_sample:end_sample]
-            original_peak = torch.max(torch.abs(chunk)) + 1e-8
-
-            batch, duration = make_batch_for_super_resolution(
-                None,
-                waveform=chunk.detach().cpu().numpy(),
-                lowpass_filter_type=lowpass_filter_type,
-            )
-            with torch.no_grad():
-                generated = latent_diffusion.generate_batch(
-                    batch,
-                    unconditional_guidance_scale=guidance_scale,
-                    ddim_steps=ddim_steps,
-                    duration=duration,
+            chunk_records.append(
+                (
+                    start_sample,
+                    end_sample,
+                    chunk,
+                    torch.max(torch.abs(chunk)) + 1e-8,
                 )
-            processed = _trim_or_pad(
-                _extract_single_generated(generated), current_chunk_len
             )
-            processed_peak = torch.max(torch.abs(processed)) + 1e-8
-            processed = (processed / processed_peak) * original_peak
 
-            left_overlap = min(overlap_samples, current_chunk_len) if start_sample > 0 else 0
-            right_overlap = min(overlap_samples, current_chunk_len) if end_sample < total_samples else 0
-            if left_overlap:
-                fade_in, _ = _fade_pair(left_overlap, processed.dtype)
-                processed[:left_overlap] *= fade_in
-            if right_overlap:
-                _, fade_out = _fade_pair(right_overlap, processed.dtype)
-                processed[-right_overlap:] *= fade_out
+        if batch_size == 1:
+            for start_sample, end_sample, chunk, original_peak in chunk_records:
+                batch, duration = make_batch_for_super_resolution(
+                    None,
+                    waveform=chunk.detach().cpu().numpy(),
+                    lowpass_filter_type=lowpass_filter_type,
+                )
+                with torch.inference_mode():
+                    generated = latent_diffusion.generate_batch(
+                        batch,
+                        unconditional_guidance_scale=guidance_scale,
+                        ddim_steps=ddim_steps,
+                        sampler=sampler,
+                        ddim_eta=ddim_eta,
+                        discretize=discretize,
+                    )
+                _blend_long_audio_chunk(
+                    final_waveform,
+                    contribution_map,
+                    channel_index,
+                    start_sample,
+                    end_sample,
+                    overlap_samples,
+                    _extract_single_generated(generated),
+                    original_peak,
+                )
+            continue
 
-            final_waveform[0, channel_index, start_sample:end_sample] += processed
-            contribution = torch.ones(current_chunk_len, dtype=processed.dtype)
-            if left_overlap:
-                contribution[:left_overlap] *= _fade_pair(left_overlap, processed.dtype)[0]
-            if right_overlap:
-                contribution[-right_overlap:] *= _fade_pair(right_overlap, processed.dtype)[1]
-            contribution_map[0, channel_index, start_sample:end_sample] += contribution
+        for batch_start in range(0, len(chunk_records), batch_size):
+            record_batch = chunk_records[batch_start : batch_start + batch_size]
+            generated_batch = _generate_long_audio_batch(
+                latent_diffusion,
+                [record[2].detach().cpu().numpy() for record in record_batch],
+                seed=int(seed) + batch_start,
+                lowpass_seed=int(seed),
+                ddim_steps=ddim_steps,
+                guidance_scale=guidance_scale,
+                sampler=sampler,
+                ddim_eta=ddim_eta,
+                discretize=discretize,
+            )
+            for record, processed in zip(record_batch, generated_batch):
+                start_sample, end_sample, _chunk, original_peak = record
+                _blend_long_audio_chunk(
+                    final_waveform,
+                    contribution_map,
+                    channel_index,
+                    start_sample,
+                    end_sample,
+                    overlap_samples,
+                    torch.as_tensor(processed, dtype=torch.float32),
+                    original_peak,
+                )
 
     final_waveform = final_waveform / contribution_map.clamp_min(1e-8)
     return torch.clamp(final_waveform, -1.0, 1.0)
@@ -433,6 +753,9 @@ def super_resolution_batch(
     ddim_steps=200,
     guidance_scale=3.5,
     lowpass_seed=None,
+    sampler=DEFAULT_SAMPLER,
+    ddim_eta=1.0,
+    discretize=DEFAULT_DISCRETIZATION,
 ):
     """
     Process caller-grouped mono 48 kHz waveforms in one model invocation.
@@ -440,6 +763,9 @@ def super_resolution_batch(
     Inputs may have different lengths; all feature batches share one padded
     sample count, and each returned NumPy array is trimmed to its input length.
     """
+    sampler = normalize_sampler(sampler)
+    ddim_eta = normalize_ddim_eta(ddim_eta)
+    discretize = normalize_discretize(discretize)
     waveforms = list(waveforms_list)
     if not waveforms:
         return []
@@ -468,12 +794,14 @@ def super_resolution_batch(
         else:
             combined_batch[key] = value
 
-    with torch.no_grad():
+    with torch.inference_mode():
         generated = latent_diffusion.generate_batch(
             combined_batch,
             unconditional_guidance_scale=guidance_scale,
             ddim_steps=ddim_steps,
-            duration=padded_samples / _SAMPLE_RATE,
+            sampler=sampler,
+            ddim_eta=ddim_eta,
+            discretize=discretize,
         )
 
     return [

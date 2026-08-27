@@ -3,6 +3,25 @@ import argparse
 import logging
 import os
 
+from audiosr.sampling import (
+    DEFAULT_DISCRETIZATION,
+    DEFAULT_SAMPLER,
+    SUPPORTED_DISCRETIZATIONS,
+    SUPPORTED_SAMPLERS,
+)
+
+
+def _ddim_eta(value):
+    try:
+        eta = float(value)
+    except (TypeError, ValueError) as exc:
+        raise argparse.ArgumentTypeError("DDIM eta must be a number") from exc
+    if not eta == eta or eta in (float("inf"), float("-inf")):
+        raise argparse.ArgumentTypeError("DDIM eta must be finite")
+    if eta < 0:
+        raise argparse.ArgumentTypeError("DDIM eta must not be negative")
+    return eta
+
 
 def _ddim_steps(value):
     try:
@@ -12,6 +31,14 @@ def _ddim_steps(value):
     if not 1 <= steps <= 1000:
         raise argparse.ArgumentTypeError("DDIM steps must be between 1 and 1000")
     return steps
+
+
+DEFAULT_SUFFIX = "_AudioSR_Processed_48K"
+
+
+def rate_suffix(sample_rate):
+    """Return the default suffix for a result written at ``sample_rate``."""
+    return f"_AudioSR_Processed_{f'{sample_rate / 1000:g}'.replace('.', '_')}K"
 
 
 def build_parser():
@@ -62,6 +89,36 @@ def build_parser():
         help="The sampling step for DDIM (1-1000)",
     )
     parser.add_argument(
+        "--sampler",
+        type=str,
+        default=DEFAULT_SAMPLER,
+        choices=list(SUPPORTED_SAMPLERS),
+        help=(
+            "Sampling algorithm. 'ddim' keeps the established schedule; "
+            "'dpmpp2m' solves the probability-flow ODE and needs far fewer steps"
+        ),
+    )
+    parser.add_argument(
+        "--ddim_eta",
+        type=_ddim_eta,
+        default=1.0,
+        help=(
+            "How stochastic each DDIM update is: 0.0 is deterministic and 1.0 "
+            "is fully ancestral. Only the ddim sampler uses it"
+        ),
+    )
+    parser.add_argument(
+        "--discretize",
+        type=str,
+        default=DEFAULT_DISCRETIZATION,
+        choices=list(SUPPORTED_DISCRETIZATIONS),
+        help=(
+            "Timestep spacing. 'uniform' keeps the established schedule but "
+            "stops short of the noisiest timestep when the step count divides "
+            "1000; 'trailing' always reaches it"
+        ),
+    )
+    parser.add_argument(
         "-gs",
         "--guidance_scale",
         type=float,
@@ -78,7 +135,7 @@ def build_parser():
         "--suffix",
         type=str,
         help="Suffix for the output file",
-        default="_AudioSR_Processed_48K",
+        default=DEFAULT_SUFFIX,
     )
     parser.add_argument(
         "--chunking",
@@ -97,6 +154,15 @@ def build_parser():
         default=2,
         help="Overlap duration in seconds for long audio processing.",
     )
+    parser.add_argument(
+        "--preserve_input_rate",
+        action="store_true",
+        help=(
+            "Write the result at the input's own sample rate instead of 48 kHz, "
+            "keeping whatever the input carried above 24 kHz. The model works at "
+            "48 kHz and generates nothing above 24 kHz either way."
+        ),
+    )
 
     return parser
 
@@ -112,6 +178,7 @@ def main(argv=None):
         build_model,
         get_time,
         read_list,
+        restore_high_rate,
         save_wave,
         super_resolution,
         super_resolution_long_audio,
@@ -142,8 +209,6 @@ def main(argv=None):
     audiosr = build_model(model_name=args.model_name, device=args.device)
 
     for input_file in files_todo:
-        name = os.path.splitext(os.path.basename(input_file))[0] + args.suffix
-
         if args.chunking:
             waveform = super_resolution_long_audio(
                 audiosr,
@@ -151,6 +216,9 @@ def main(argv=None):
                 seed=random_seed,
                 guidance_scale=guidance_scale,
                 ddim_steps=args.ddim_steps,
+                sampler=args.sampler,
+                ddim_eta=args.ddim_eta,
+                discretize=args.discretize,
                 chunk_duration_s=args.chunk_duration,
                 overlap_duration_s=args.overlap_duration,
             )
@@ -161,14 +229,29 @@ def main(argv=None):
                 seed=random_seed,
                 guidance_scale=guidance_scale,
                 ddim_steps=args.ddim_steps,
+                sampler=args.sampler,
+                ddim_eta=args.ddim_eta,
+                discretize=args.discretize,
                 latent_t_per_second=latent_t_per_second,
             )
+        output_rate = sample_rate
+        if args.preserve_input_rate:
+            waveform, output_rate = restore_high_rate(waveform, input_file)
+
+        # The stock suffix names the model's own rate, which stops being the
+        # output's rate as soon as the input's is preserved. An explicit
+        # --suffix is the caller's choice and is left alone.
+        suffix = args.suffix
+        if suffix == DEFAULT_SUFFIX and output_rate != sample_rate:
+            suffix = rate_suffix(output_rate)
+        name = os.path.splitext(os.path.basename(input_file))[0] + suffix
+
         save_wave(
             waveform,
             inputpath=input_file,
             savepath=save_path,
             name=name,
-            samplerate=sample_rate,
+            samplerate=output_rate,
         )
 
     return 0

@@ -106,3 +106,47 @@ def test_rocm_runs_basic_model_inference(tmp_path):
 
     assert result.shape == (1, 1, sample_count * 3)
     assert np.isfinite(result).all()
+
+
+def test_rocm_band_replacement_accepts_a_host_conditioning_batch():
+    """The conditioning batch stays on the host while generation runs on the GPU.
+
+    Both replacement stages have to bridge that gap themselves, so this pins the
+    combination a CPU-only test run cannot reach.
+    """
+    from audiosr.latent_diffusion.models import ddpm
+
+    device = _rocm_device()
+    model = object.__new__(ddpm.LatentDiffusion)
+
+    lowpass_mel = (
+        torch.linspace(-6.0, 1.0, 256).reshape(1, 1, 256).expand(2, 64, 256).contiguous()
+    )
+    samples = torch.zeros(2, 1, 64, 256, device=device)
+    replaced = model.mel_replace_ops(samples.clone(), lowpass_mel)
+
+    assert replaced.device.type == "cuda"
+    assert torch.isfinite(replaced).all()
+    assert not torch.equal(replaced, samples)
+
+    generated = torch.randn(2, 1, 8192, device=device) * 0.2
+    source = torch.randn(2, 1, 8192) * 0.2
+    renewed = model.postprocessing(generated.clone(), source)
+
+    torch.cuda.synchronize()
+    assert renewed.device.type == "cuda"
+    assert renewed.shape == generated.shape
+    assert torch.isfinite(renewed).all()
+
+
+@pytest.mark.skipif(
+    not RUN_FULL_INFERENCE,
+    reason="set AUDIOSR_RUN_ROCM_FULL_INFERENCE=1 to load the real checkpoint",
+)
+def test_the_released_checkpoint_shares_one_vae_between_both_stages():
+    """The released weights repeat the VAE, so only one copy should be built."""
+    model = pipeline.build_model(device="cpu")
+
+    extractor = model.cond_stage_models[0]
+    assert extractor.vae is model.first_stage_model
+    assert model.share_first_stage_cond == ("concat_lowpass_cond",)
