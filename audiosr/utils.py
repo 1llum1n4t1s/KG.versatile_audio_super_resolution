@@ -182,12 +182,14 @@ def mel_spectrogram_train(y):
     mel_fmin = 20
     mel_fmax = 24000
 
-    if 24000 not in mel_basis:
+    mel_cache_key = str(mel_fmax) + "_" + str(y.device)
+    window_cache_key = str(y.device)
+    if mel_cache_key not in mel_basis or window_cache_key not in hann_window:
         mel = librosa_mel_fn(sr=sampling_rate, n_fft=filter_length, n_mels=n_mel, fmin=mel_fmin, fmax=mel_fmax)
-        mel_basis[str(mel_fmax) + "_" + str(y.device)] = (
+        mel_basis[mel_cache_key] = (
             torch.from_numpy(mel).float().to(y.device)
         )
-        hann_window[str(y.device)] = torch.hann_window(win_length).to(y.device)
+        hann_window[window_cache_key] = torch.hann_window(win_length).to(y.device)
 
     y = torch.nn.functional.pad(
         y.unsqueeze(1),
@@ -202,7 +204,7 @@ def mel_spectrogram_train(y):
         filter_length,
         hop_length=hop_length,
         win_length=win_length,
-        window=hann_window[str(y.device)],
+        window=hann_window[window_cache_key],
         center=False,
         pad_mode="reflect",
         normalized=False,
@@ -213,7 +215,7 @@ def mel_spectrogram_train(y):
     stft_spec = torch.abs(stft_spec)
 
     mel = spectral_normalize_torch(
-        torch.matmul(mel_basis[str(mel_fmax) + "_" + str(y.device)], stft_spec)
+        torch.matmul(mel_basis[mel_cache_key], stft_spec)
     )
 
     return mel[0], stft_spec[0]
