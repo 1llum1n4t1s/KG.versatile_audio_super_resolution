@@ -30,6 +30,8 @@ AudioSR is a generative audio super-resolution model. It is designed to preserve
 
 The inference pipeline uses a fixed 48 kHz working and output rate. Other input sample rates are resampled to 48 kHz; this does not mean that the original recording contained recoverable information above its input bandwidth.
 
+A source recorded above 48 kHz therefore loses everything over 24 kHz, and the result comes back at 48 kHz. `--preserve_input_rate` writes at the input's own rate instead and puts the input's own content above 24 kHz back, so a 96 kHz file stays a 96 kHz file and is named `_AudioSR_Processed_96K`. It adds no bandwidth: the model generates nothing up there either way, and on real recordings that band usually carries only the noise floor. A 96 kHz 24-bit solo piano recording measures a flat -91 dB above 24 kHz, with no musical content at all.
+
 AudioSR is not a general restoration filter. It is not trained or intended to repair time-domain losses, packet loss, or low-frequency noise. Inputs with an unfamiliar cutoff pattern, such as some MP3 encodings, may produce weaker high-frequency inpainting. See [Important things to know to make AudioSR work](example/how_to_make_audiosr_work.md) for examples and low-pass preprocessing guidance.
 
 Bit depth is a separate property from sample rate and generated bandwidth. Increasing the output sample rate or synthesizing high frequencies does not recover information that was lost through low bit depth.
@@ -38,10 +40,10 @@ Bit depth is a separate property from sample rate and generated bandwidth. Incre
 
 - Mono and multi-channel audio are preserved through CLI, long-audio, Gradio,
   and output-writing paths.
-- Long recordings use overlap-and-add chunking, including safe handling of
-  short final chunks.
-- The local Gradio app supports GPU chunk batching, deterministic seeds, and
-  reuses the selected model between requests.
+- Long recordings use overlap-and-add chunking with bounded GPU batches,
+  including safe handling of short final chunks and single-chunk OOM retry.
+- Long-audio and local Gradio batching keep deterministic seeds and reuse the
+  selected model between requests.
 - Local Safetensors checkpoints are supported. PyTorch checkpoints are loaded
   with `weights_only=True`.
 - Audio decoding and output use SoundFile directly, without requiring
@@ -192,7 +194,11 @@ The most relevant options are:
 | `-s`, `--save_path` | `./output` | Parent directory for timestamped output. |
 | `--model_name` | `basic` | Checkpoint: `basic` or `speech`. |
 | `-d`, `--device` | `auto` | `auto`, `cpu`, `cuda`, `cuda:N`, or `mps`. |
-| `--ddim_steps` | `50` | DDIM sampling steps from 1 to 1000. More steps usually take longer. |
+| `--ddim_steps` | `50` | Sampling steps from 1 to 1000. More steps usually take longer. |
+| `--sampler` | `ddim` | `ddim`, `dpmpp2m`, or `ddpm`. `dpmpp2m` needs far fewer steps. |
+| `--ddim_eta` | `1.0` | How stochastic each `ddim` update is: `0.0` is deterministic, `1.0` is fully ancestral. Only `ddim` uses it. |
+| `--discretize` | `uniform` | Timestep spacing: `uniform`, `trailing`, or `quad`. `trailing` measured better at every step count tried; `uniform` is the default for compatibility only. |
+| `--preserve_input_rate` | off | Write at the input's own rate instead of 48 kHz, keeping whatever the input held above 24 kHz. |
 | `-gs`, `--guidance_scale` | `3.5` | Strength of the low-pass audio conditioning. |
 | `--seed` | `42` | Integer seed for reproducible sampling. |
 | `--suffix` | `_AudioSR_Processed_48K` | Suffix appended to the output filename. |
@@ -200,7 +206,48 @@ The most relevant options are:
 | `--chunk_duration` | `15` | Chunk length in seconds when chunking is enabled. |
 | `--overlap_duration` | `2` | Cross-fade overlap in seconds when chunking is enabled. |
 
-Start `--guidance_scale` around 2.5–5.0 and adjust by ear. This guidance scale controls adherence to the low-pass audio condition; it is not a text prompt relevance or text-to-audio control. Memory use and speed vary with input length, DDIM steps, selected device, and whether chunking is enabled.
+Start `--guidance_scale` around 2.5–5.0 and adjust by ear. This guidance scale controls adherence to the low-pass audio condition; it is not a text prompt relevance or text-to-audio control. Memory use and speed vary with input length, sampling steps, selected device, and whether chunking is enabled.
+
+The default `--sampler ddim` with `--ddim_eta 1.0` reproduces the established
+schedule, where every update is fully ancestral and quality keeps improving with
+step count. `--sampler dpmpp2m` instead solves the deterministic
+probability-flow ODE, which converges in far fewer steps for the same number of
+network evaluations per step:
+
+```shell
+python -m audiosr -i path/to/input.wav --sampler dpmpp2m --ddim_steps 30
+```
+
+**Use `--discretize trailing`.** The default `uniform` spacing reaches the
+noisiest timestep only when the step count does not divide 1000; at 20, 25, 50,
+100 and other exact divisors it stops short. On a music reference, `trailing` at
+20 steps scored better than the 50-step default and ran 14% faster, and 12 steps
+matched it; `uniform` at 20 steps scored worse than not restoring at all. The
+default stays `uniform` so existing output does not change, not because it
+measured better:
+
+```shell
+python -m audiosr -i path/to/input.wav --ddim_steps 20 --discretize trailing
+```
+
+Which configuration wins depends on the material and the accelerator, so measure
+before settling on one. `tools/benchmark_samplers.py` degrades a high-quality
+reference, restores it with each configuration, and reports time next to
+log-spectral distance:
+
+```shell
+python tools/benchmark_samplers.py --reference reference.flac \
+  --config ddim:50:1.0:uniform --config ddim:20:0.0:trailing \
+  --config dpmpp2m:20::trailing --config dpmpp2m:30::trailing
+```
+
+Restorations are written to `--output_dir` so the same run can also feed a blind
+listening comparison. The reference must be a genuinely high-quality recording
+whose missing band carries structure rather than noise: harmonic material such
+as solo piano separates configurations cleanly, while speech does not, because
+the model can restore the right amount of fricative energy without restoring the
+right detail and a log-spectral distance cannot tell that from silence. The run
+warns when no configuration beat the degraded input by a useful margin.
 
 ## Gradio demo
 
@@ -232,7 +279,7 @@ different checkpoint is selected.
 
 ## Developer notes
 
-The latent diffusion path operates on latent tensors shaped `[B, 16, 128, 32]` for the default model configuration. Code that integrates with the model should obtain inputs through `get_input(...)` so first-stage encoding, conditioning, and device placement stay consistent with the inference path.
+The latent diffusion path operates on latent tensors shaped `[B, 16, 128, 32]` for the default model configuration. Code that integrates with the model should obtain inputs through `get_input(...)` so conditioning and device placement stay consistent with the inference path. Generation starts from noise and never samples the target latent, so the inference path calls it with `return_first_stage_encode=False`; pass `True` only when the encoded target is actually used.
 
 ## Cite our work
 

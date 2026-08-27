@@ -6,6 +6,121 @@ The upstream project history before this fork remains available in the
 
 ## [Unreleased]
 
+### Added
+
+- Added a `dpmpp2m` sampler that integrates the probability-flow ODE with
+  multistep DPM-Solver++, reaching a comparable result in far fewer network
+  evaluations than the ancestral schedule. At first order it is algebraically
+  identical to DDIM with `ddim_eta=0.0`, which the regression tests assert.
+- Exposed `sampler` and `ddim_eta` on `super_resolution`,
+  `super_resolution_long_audio`, `super_resolution_batch`, and the CLI, so the
+  sampling algorithm and how stochastic each update is can be selected per run.
+  Both are validated at the public entry points and at the sampler boundary.
+- Added a `trailing` timestep spacing, selectable through `discretize` on the
+  public entry points and `--discretize` on the CLI. The established `uniform`
+  spacing reaches the noisiest timestep only when the step count does not divide
+  the training schedule; for exact divisors it stops short, which leaves a
+  signal component that sampling from pure noise never accounts for. The default
+  remains `uniform`.
+- Added `tools/benchmark_samplers.py`, which degrades a high-quality reference,
+  restores it with each requested configuration, and reports wall-clock cost
+  next to log-spectral distance and band energy. Scoring covers only the band
+  the reference can judge, energy generated beyond the reference's own bandwidth
+  is reported separately rather than counted as error, and the run warns when no
+  configuration beats the degraded input. Every restoration is written out so
+  the same run can feed a blind listening comparison.
+- Added `restore_high_rate`, and `--preserve_input_rate` on the CLI, which
+  return the restoration at the source file's own rate instead of at 48 kHz and
+  splice the source's content above 24 kHz back in. The model cannot reach past
+  24 kHz, so this preserves what the source carried rather than adding
+  bandwidth; on real recordings that band usually holds only the noise floor.
+  The established entry points and their 48 kHz contract are unchanged. The
+  stock output suffix names the rate the file was actually written at, so a
+  preserved 96 kHz result is no longer labelled `48K`; an explicit `--suffix`
+  is left alone.
+
+### Changed
+
+- Added bounded long-audio chunk batching without reducing the requested DDIM
+  steps, with automatic single-chunk retry when an accelerator runs out of
+  memory.
+- Use PyTorch inference mode at the public inference boundaries to avoid
+  autograd bookkeeping while retaining the established output contract.
+- Reduced DDIM inference overhead by fusing the conditional and unconditional
+  guidance branches for bounded batches, reusing schedules and timestep
+  metadata, and avoiding intermediate tensors that the public pipeline discards.
+- Stopped encoding the target spectrogram during generation. Sampling starts
+  from noise and only the conditioning latent reaches the network, so that
+  first-stage forward pass was computed and discarded on every call. Its shape
+  now comes from the conditioning latent, which an identically configured
+  autoencoder produces from a spectrogram of the same dimensions.
+- Replaced the per-item librosa band-replacement loop with one batched
+  transform that runs on the device holding the waveform, keeping the vocoder
+  output a tensor through normalization. The crossover bin, the level-matching
+  gain, and its limits are unchanged.
+- Replaced the `ddim` / `use_plms` flag pair with one `sampler` name across
+  `generate_batch` and `sample_log`. The full `ddpm` schedule remains selectable
+  by name.
+- Build one autoencoder instead of two when the checkpoint stores the same
+  weights for the diffusion model's first stage and for the conditioning stage
+  that encodes the low band. The released checkpoints do, so the second copy
+  was built, moved to the accelerator, and held for the life of the process
+  without ever differing from the first. The comparison is made against the
+  checkpoint rather than against the configuration, so a checkpoint that
+  trained the two apart still loads both.
+- Read the checkpoint before constructing the model, so the weights that turn
+  out to be redundant are released before the model allocates.
+- Take the benchmark tool's usable reference band from the recording's noise
+  floor rather than from its loudest bin. Music with a steep spectral slope sits
+  far below its own fundamental while still carrying content: a 96 kHz piano
+  recording measures 88 dB down at 16 kHz, and the previous peak-relative cut
+  discarded most of the band such a reference can judge.
+
+### Removed
+
+- Removed the PLMS sampler. No public entry point could reach it, and its
+  `register_buffer` moved every schedule tensor to `cuda` unconditionally, so
+  constructing it failed on CPU, ROCm, and MPS. `dpmpp2m` supersedes it.
+
+### Fixed
+
+- Dropped the `duration` argument the public pipeline passed to
+  `generate_batch`, which reached `**kwargs` and was never read.
+- `get_input` now rejects `return_decoding_output` and `return_encoder_output`
+  when the first-stage encode is skipped, instead of failing on an unbound
+  local.
+- Band replacement now moves the conditioning batch onto the device holding the
+  generated sample. The conditioning batch reaches that stage on the host, which
+  the previous element assignment absorbed implicitly.
+- Band replacement now aligns the source to the generated length explicitly. The
+  vocoder overshoots the conditioning length by part of one hop, which the
+  previous implementation absorbed only because both lengths happened to produce
+  the same number of analysis frames.
+
+### Note
+
+- Skipping the discarded first-stage encode removes the random draw it made, so
+  a given seed reaches the sampler with a different noise tensor than in 1.0.2.
+  Output for a fixed seed therefore changes, while the sampling distribution and
+  the established schedule do not.
+- Measured on one Radeon 760M against a 10 s excerpt of a 96 kHz 24-bit piano
+  recording band-limited to 4 kHz, `trailing` at 20 steps scored best (1.498)
+  and the shipped `uniform` 50-step default scored worst of the sound
+  configurations (1.633) while taking 14% longer. Dropping to 12 steps cost
+  nothing (1.499), so reducing the step count works, but only with `trailing`.
+  `uniform` at 20 steps lost to the degraded input itself (3.270 against 3.189)
+  and scattered energy above the reference's band at 1262 times the band's own
+  level. The defaults are unchanged for compatibility alone; there is no quality
+  argument for them.
+- The same configurations measured against `example/speech.wav` separated by
+  0.03%, with nothing beating the degraded input. A log-spectral distance cannot
+  judge material whose missing band is noise: the model restores the right
+  amount of energy without the right detail, which scores no better than
+  silence. References for this tool need a missing band that carries structure.
+- The vocoder accounted for 82% of one call's wall clock on that machine, so
+  step count moves total runtime much less there than the sampling share
+  suggests.
+
 ## [1.0.2] - 2026-08-25
 
 ### Added
