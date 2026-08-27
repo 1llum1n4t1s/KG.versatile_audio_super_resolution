@@ -519,6 +519,16 @@ class UNetModel(nn.Module):
         self.image_size = image_size
         self.in_channels = in_channels
         self.model_channels = model_channels
+        half_time_embedding = model_channels // 2
+        self.register_buffer(
+            "_timestep_embedding_frequencies",
+            th.exp(
+                -math.log(10000)
+                * th.arange(0, half_time_embedding, dtype=th.float32)
+                / half_time_embedding
+            ),
+            persistent=False,
+        )
         self.out_channels = out_channels
         self.num_res_blocks = num_res_blocks
         self.attention_resolutions = attention_resolutions
@@ -859,7 +869,12 @@ class UNetModel(nn.Module):
             self.num_classes is not None or self.extra_film_condition_dim is not None
         ), "must specify y if and only if the model is class-conditional or film embedding conditional"
         hs = []
-        t_emb = timestep_embedding(timesteps, self.model_channels, repeat_only=False)
+        t_emb = timestep_embedding(
+            timesteps,
+            self.model_channels,
+            repeat_only=False,
+            frequencies=self._timestep_embedding_frequencies,
+        )
         emb = self.time_embed(t_emb)
 
         # if self.num_classes is not None:
