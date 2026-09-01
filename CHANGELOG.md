@@ -6,6 +6,29 @@ The upstream project history before this fork remains available in the
 
 ## [Unreleased]
 
+## [1.0.4] - 2026-09-01
+
+### Breaking changes
+
+- Dropped Python 3.10 through 3.13. Install and use Python 3.14 before
+  upgrading this independently maintained fork.
+
+### Changed
+
+- Standardized on Librosa 1.x and removed the legacy Python-version markers.
+
+### Fixed
+
+- Enforced tensor-only checkpoint loading across model, vocoder, CLAP, and
+  training-resume paths, including native Safetensors loading.
+- Aligned the Python API and Gradio defaults with the CLI's 50 DDIM steps.
+- Preserved in-range output levels in Gradio while still scaling down peaks
+  above full scale.
+- Released MPS caches during model replacement and OOM retry as well as CUDA
+  caches.
+- Made quadratic DDIM schedules strictly increasing without changing the
+  requested step count.
+
 ## [1.0.3] - 2026-09-01
 
 ### Added

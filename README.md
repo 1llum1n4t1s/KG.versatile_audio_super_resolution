@@ -12,13 +12,13 @@
 > **This is an independently maintained fork.** Development, issues, and
 > releases are managed here rather than by the upstream project.
 
-[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.4-blue.svg?style=flat-square)](CHANGELOG.md)
 [![PyPI](https://img.shields.io/pypi/v/kagayoi-audiosr?style=flat-square)](https://pypi.org/project/kagayoi-audiosr/)
-[![Python](https://img.shields.io/badge/python-3.10--3.14-blue.svg?style=flat-square)](setup.py)
+[![Python](https://img.shields.io/badge/python-3.14-blue.svg?style=flat-square)](setup.py)
 [![arXiv](https://img.shields.io/badge/upstream_arXiv-2309.07314-brightgreen.svg?style=flat-square)](https://arxiv.org/abs/2309.07314)
 [![Upstream samples](https://img.shields.io/badge/upstream-audio_samples-blue?logo=Github&style=flat-square)](https://audioldm.github.io/audiosr)
 
-Current fork release: **1.0.3**. See the [changelog](CHANGELOG.md) for details.
+Current fork release: **1.0.4**. See the [changelog](CHANGELOG.md) for details.
 
 AudioSR restores high-frequency detail from a low-pass audio condition and writes a 48 kHz result. It works with many kinds of audio, including music, speech, and environmental recordings.
 
@@ -48,7 +48,7 @@ Bit depth is a separate property from sample rate and generated bandwidth. Incre
   with `weights_only=True`.
 - Audio decoding and output use SoundFile directly, without requiring
   `ffprobe` for ordinary inference.
-- Python 3.10 through 3.14 and current PyTorch installations are supported.
+- Python 3.14 and current PyTorch installations are supported.
 
 ## Project history
 
@@ -62,19 +62,19 @@ Bit depth is a separate property from sample rate and generated bandwidth. Incre
 
 ```shell
 # Windows PowerShell (venv, using uv)
-uv venv --python 3.12 .venv
+uv venv --python 3.14 .venv
 .venv\Scripts\Activate.ps1
 
 # macOS/Linux (venv, using uv)
-uv venv --python 3.12 .venv
+uv venv --python 3.14 .venv
 source .venv/bin/activate
 
 # Or use conda instead of venv:
-# conda create -n audiosr python=3.12
+# conda create -n audiosr python=3.14
 # conda activate audiosr
 ```
 
-AudioSR is intended for Python 3.10 through 3.14. Use an isolated environment and activate it before installing anything.
+AudioSR requires Python 3.14. Use an isolated environment and activate it before installing anything.
 
 Install PyTorch before AudioSR. Select the wheel for the operating system, Python version, and accelerator from the [official PyTorch installation selector](https://pytorch.org/get-started/locally/). For an RTX 50-series/Blackwell machine, a current official stable CUDA 13.0 wheel can be installed with this example:
 
@@ -353,4 +353,3 @@ When processed by AudioSR, the output will then be as expected, with improved hi
 ---
 
 By understanding the limitations and addressing them with preprocessing, you can maximize the performance of AudioSR!
-

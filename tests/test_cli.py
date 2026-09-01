@@ -56,6 +56,15 @@ def test_parser_rejects_ddim_steps_outside_sampler_range(steps):
         parser.parse_args(["-i", "input.wav", "--ddim_steps", steps])
 
 
+@pytest.mark.parametrize("seed", [-1, 2**32])
+def test_parser_accepts_any_integer_seed(seed):
+    args = load_cli_module().build_parser().parse_args(
+        ["-i", "input.wav", "--seed", str(seed)]
+    )
+
+    assert args.seed == seed
+
+
 def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
     monkeypatch, tmp_path
 ):
@@ -210,8 +219,13 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
     assert set(namespace["REQUIRED"]) == requirements
     assert captured["install_requires"] == namespace["REQUIRED"]
     assert captured["name"] == "kagayoi-audiosr"
-    assert captured["python_requires"] == ">=3.10,<3.15"
-    assert captured["version"] == "1.0.3"
+    assert captured["python_requires"] == ">=3.14,<3.15"
+    assert [
+        classifier
+        for classifier in captured["classifiers"]
+        if classifier.startswith("Programming Language :: Python :: 3.")
+    ] == ["Programming Language :: Python :: 3.14"]
+    assert captured["version"] == "1.0.4"
     assert captured["url"] == "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
     assert captured["author_email"] == ""
     assert captured["maintainer"] == "Kagayoi"

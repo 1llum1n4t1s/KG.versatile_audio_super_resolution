@@ -26,8 +26,8 @@ EMAIL = ""
 AUTHOR = "Haohe Liu"
 MAINTAINER = "Kagayoi"
 MAINTAINER_EMAIL = "contact@kagayoi.com"
-REQUIRES_PYTHON = ">=3.10,<3.15"
-VERSION = "1.0.3"
+REQUIRES_PYTHON = ">=3.14,<3.15"
+VERSION = "1.0.4"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
@@ -35,27 +35,26 @@ REQUIRED = [
     "torchaudio>=2.11",
     "torchvision>=0.27",
     "tqdm>=4.70",
-    "gradio>=6.25,<7",
+    "gradio>=6.26,<7",
     "pyyaml>=6.0.3",
     "einops>=0.8.2",
     "chardet>=7.6",
     "numpy>=2.2.6,<3",
     "soundfile>=0.14",
-    'librosa>=0.11,<1; python_version < "3.12"',
-    'librosa>=1,<2; python_version >= "3.12"',
+    "librosa>=1,<2",
     "scipy>=1.15.3,<2",
     "pandas>=2.3.3,<4",
     "unidecode>=1.4",
     "phonemizer>=3.4",
     "torchlibrosa>=0.1",
-    "transformers>=5.15.1,<6",
-    "huggingface-hub>=1.28,<2",
+    "transformers>=5.16.1,<6",
+    "huggingface-hub>=1.29,<2",
     "Pillow>=12.3,<13",
     "requests>=2.34.2,<3",
     "scikit-learn>=1.7.2,<2",
     "progressbar2>=4.6,<5",
     "ftfy>=6.3.1,<7",
-    "timm>=1.0.28,<2",
+    "timm>=1.0.29,<2",
     "matplotlib>=3.10.9,<4",
     "pyloudnorm>=0.2,<1",
     "safetensors>=0.8,<1",
@@ -118,10 +117,6 @@ setup(
     classifiers=[
         "Programming Language :: Python",
         "Programming Language :: Python :: 3",
-        "Programming Language :: Python :: 3.10",
-        "Programming Language :: Python :: 3.11",
-        "Programming Language :: Python :: 3.12",
-        "Programming Language :: Python :: 3.13",
         "Programming Language :: Python :: 3.14",
         "Programming Language :: Python :: Implementation :: CPython",
     ],
