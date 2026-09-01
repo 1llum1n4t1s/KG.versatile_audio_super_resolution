@@ -94,10 +94,30 @@ def make_ddim_timesteps(
                 )
             ).astype(np.int64)
     elif ddim_discr_method == "quad":
-        ddim_timesteps = (
-            (np.linspace(0, np.sqrt(num_ddpm_timesteps * 0.8), num_ddim_timesteps)) ** 2
-        ).astype(int)
-        steps_out = ddim_timesteps + 1
+        if num_ddim_timesteps == num_ddpm_timesteps:
+            steps_out = np.arange(num_ddpm_timesteps, dtype=np.int64)
+        else:
+            legacy_targets = (
+                np.linspace(
+                    0,
+                    np.sqrt(num_ddpm_timesteps * 0.8),
+                    num_ddim_timesteps,
+                )
+                ** 2
+            ).astype(np.int64) + 1
+            # Retain the established quadratic targets where possible while
+            # reserving enough integer slots for a strictly increasing result.
+            max_timestep = min(
+                num_ddpm_timesteps - 1,
+                max(int(num_ddpm_timesteps * 0.8) + 1, num_ddim_timesteps),
+            )
+            lower_bounds = np.arange(1, num_ddim_timesteps + 1, dtype=np.int64)
+            upper_bounds = max_timestep - np.arange(
+                num_ddim_timesteps - 1, -1, -1, dtype=np.int64
+            )
+            steps_out = np.clip(legacy_targets, lower_bounds, upper_bounds)
+            for index in range(1, steps_out.size):
+                steps_out[index] = max(steps_out[index], steps_out[index - 1] + 1)
     else:
         raise NotImplementedError(
             f'There is no ddim discretization method called "{ddim_discr_method}"'
@@ -107,6 +127,8 @@ def make_ddim_timesteps(
         raise RuntimeError("DDIM schedule does not match the requested step count")
     if steps_out.min() < 0 or steps_out.max() >= num_ddpm_timesteps:
         raise RuntimeError("DDIM schedule contains an out-of-range timestep")
+    if steps_out.size > 1 and np.any(np.diff(steps_out) <= 0):
+        raise RuntimeError("DDIM schedule must be strictly increasing")
     if verbose:
         print(f"Selected timesteps for ddim sampler: {steps_out}")
     return steps_out

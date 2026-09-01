@@ -1,5 +1,6 @@
 import torch
 
+from audiosr.checkpoint import load_checkpoint
 import audiosr.hifigan as hifigan
 
 
@@ -71,7 +72,7 @@ def get_vocoder_config_48k():
 
 
 def get_available_checkpoint_keys(model, ckpt):
-    state_dict = torch.load(ckpt)["state_dict"]
+    state_dict = load_checkpoint(ckpt)["state_dict"]
     current_state_dict = model.state_dict()
     new_state_dict = {}
     for k in state_dict.keys():
@@ -126,11 +127,6 @@ def get_vocoder(config, device, mel_bins):
             config = get_vocoder_config()
             config = hifigan.AttrDict(config)
             vocoder = hifigan.Generator_old(config)
-            # print("Load hifigan/g_01080000")
-            # ckpt = torch.load(os.path.join(ROOT, "hifigan/g_01080000"))
-            # ckpt = torch.load(os.path.join(ROOT, "hifigan/g_00660000"))
-            # ckpt = torch_version_orig_mod_remove(ckpt)
-            # vocoder.load_state_dict(ckpt["generator"])
             vocoder.eval()
             vocoder.remove_weight_norm()
             vocoder.to(device)
@@ -138,11 +134,6 @@ def get_vocoder(config, device, mel_bins):
             config = get_vocoder_config_48k()
             config = hifigan.AttrDict(config)
             vocoder = hifigan.Generator_old(config)
-            # print("Load hifigan/g_01080000")
-            # ckpt = torch.load(os.path.join(ROOT, "hifigan/g_01080000"))
-            # ckpt = torch.load(os.path.join(ROOT, "hifigan/g_00660000"))
-            # ckpt = torch_version_orig_mod_remove(ckpt)
-            # vocoder.load_state_dict(ckpt["generator"])
             vocoder.eval()
             vocoder.remove_weight_norm()
             vocoder.to(device)

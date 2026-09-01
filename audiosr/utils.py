@@ -18,6 +18,7 @@ from audiosr.lowpass import lowpass
 hann_window = {}
 mel_basis = {}
 _LOWPASS_FILTER_TYPES = ("butter", "cheby1", "ellip", "bessel")
+_NUMPY_SEED_MODULUS = 2**32
 _CHECKPOINT_REVISIONS = {
     "basic": (
         "haoheliu/audiosr_basic",
@@ -28,6 +29,11 @@ _CHECKPOINT_REVISIONS = {
         "413f1d734411663e95310c17d381279a0c049960",
     ),
 }
+
+
+def _normalize_seed(seed):
+    """Map any integer seed to the range shared by NumPy's legacy RNGs."""
+    return int(seed) % _NUMPY_SEED_MODULUS
 
 
 def dynamic_range_compression_torch(x, C=1, clip_val=1e-5):
@@ -126,7 +132,7 @@ def pad_wav(waveform, target_length):
 def _select_lowpass_filter_type(seed=None):
     if seed is None:
         return str(np.random.choice(_LOWPASS_FILTER_TYPES))
-    return str(np.random.RandomState(int(seed)).choice(_LOWPASS_FILTER_TYPES))
+    return str(np.random.RandomState(_normalize_seed(seed)).choice(_LOWPASS_FILTER_TYPES))
 
 
 def lowpass_filtering_prepare_inference(dl_output, filter_type=None):
@@ -333,6 +339,7 @@ def seed_everything(seed):
     import numpy as np
     import torch
 
+    seed = _normalize_seed(seed)
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)
     np.random.seed(seed)

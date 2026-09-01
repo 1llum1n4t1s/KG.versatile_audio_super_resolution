@@ -9,6 +9,7 @@ from typing import Union, List
 
 import torch
 
+from audiosr.checkpoint import load_checkpoint
 from .model import build_model_from_openai_state_dict
 from .pretrained import (
     get_pretrained_url,
@@ -73,7 +74,7 @@ def load_openai_model(
                 f"File {model_path} is not a JIT archive. Loading as a state dict instead"
             )
             jit = False
-        state_dict = torch.load(model_path, map_location="cpu")
+        state_dict = load_checkpoint(model_path, map_location="cpu")
 
     if not jit:
         try:

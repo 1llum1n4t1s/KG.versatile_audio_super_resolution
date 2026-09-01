@@ -39,6 +39,15 @@ def _release_cached_model() -> None:
         return
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    mps_backend = getattr(torch.backends, "mps", None)
+    mps_module = getattr(torch, "mps", None)
+    if (
+        mps_backend is not None
+        and mps_module is not None
+        and mps_backend.is_available()
+        and callable(getattr(mps_module, "empty_cache", None))
+    ):
+        mps_module.empty_cache()
 
 
 def _get_model(model_name: str):
@@ -287,6 +296,8 @@ def process_audio_channel(
         start = index * step_size
         end = min(start + chunk_size, total_samples)
         chunks.append(audio_channel[start:end])
+        if end == total_samples:
+            break
 
     processed_results: list[np.ndarray] = []
     for batch_start in range(0, len(chunks), batch_size):
@@ -320,13 +331,13 @@ def process_audio_channel(
 
 
 def normalize_audio(audio: np.ndarray) -> np.ndarray:
-    """Normalize audio to the [-1, 1] range."""
+    """Scale down clipped audio while preserving an in-range signal's level."""
 
     audio = np.asarray(audio)
     if audio.size == 0:
         return audio
     max_val = np.max(np.abs(audio))
-    if max_val > 0:
+    if max_val > 1.0:
         return audio / max_val
     return audio
 
@@ -401,7 +412,7 @@ def create_interface() -> gr.Interface:
             gr.Audio(type="filepath", label="Input Audio"),
             gr.Dropdown(["basic", "speech"], value="basic", label="Model"),
             gr.Slider(1, 10, value=2.6, step=0.1, label="Guidance Scale"),
-            gr.Slider(1, 100, value=100, step=1, label="DDIM Steps"),
+            gr.Slider(1, 100, value=50, step=1, label="DDIM Steps"),
             gr.Slider(1, 8, value=1, step=1, label="Batch Size"),
             gr.Number(value=42, precision=0, label="Seed"),
         ],

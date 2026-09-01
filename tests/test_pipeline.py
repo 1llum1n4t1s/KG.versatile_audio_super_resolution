@@ -1,3 +1,4 @@
+import inspect
 import sys
 import types
 import subprocess
@@ -10,6 +11,7 @@ import torch
 
 import audiosr.pipeline as pipeline
 import audiosr.utils as utils
+from audiosr.latent_diffusion.models.ddpm import LatentDiffusion
 from audiosr.latent_diffusion.modules.diffusionmodules.util import make_ddim_timesteps
 
 
@@ -116,9 +118,10 @@ def test_make_ddim_timesteps_rejects_invalid_step_count(steps):
         make_ddim_timesteps("uniform", steps, 1000, verbose=False)
 
 
-@pytest.mark.parametrize("steps", [1, 17, 500, 501, 1000])
-def test_make_ddim_timesteps_matches_count_and_stays_in_bounds(steps):
-    timesteps = make_ddim_timesteps("uniform", steps, 1000, verbose=False)
+@pytest.mark.parametrize("method", ["uniform", "trailing", "quad"])
+@pytest.mark.parametrize("steps", [1, 17, 50, 500, 501, 800, 801, 999, 1000])
+def test_make_ddim_timesteps_matches_count_and_stays_in_bounds(method, steps):
+    timesteps = make_ddim_timesteps(method, steps, 1000, verbose=False)
 
     assert len(timesteps) == steps
     assert np.all(np.diff(timesteps) > 0)
@@ -132,6 +135,19 @@ def test_make_ddim_timesteps_preserves_default_schedule():
     np.testing.assert_array_equal(timesteps, np.arange(0, 1000, 20) + 1)
 
 
+@pytest.mark.parametrize(
+    "inference_function",
+    [
+        pipeline.super_resolution,
+        pipeline.super_resolution_long_audio,
+        pipeline.super_resolution_batch,
+        LatentDiffusion.generate_batch,
+    ],
+)
+def test_public_inference_defaults_to_50_ddim_steps(inference_function):
+    assert inspect.signature(inference_function).parameters["ddim_steps"].default == 50
+
+
 def test_pipeline_uses_canonical_seed_helper():
     assert pipeline.seed_everything is utils.seed_everything
 
@@ -139,6 +155,19 @@ def test_pipeline_uses_canonical_seed_helper():
 
     assert torch.backends.cudnn.deterministic is True
     assert torch.backends.cudnn.benchmark is False
+
+
+def test_clear_accelerator_cache_clears_mps(monkeypatch):
+    cache_calls = []
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+    monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
+    monkeypatch.setattr(
+        torch.mps, "empty_cache", lambda: cache_calls.append("mps")
+    )
+
+    pipeline._clear_accelerator_cache()
+
+    assert cache_calls == ["mps"]
 
 
 def test_make_batch_waveform_uses_integer_padding(monkeypatch):
@@ -185,18 +214,22 @@ def test_super_resolution_processes_stereo_and_returns_bct(monkeypatch):
     seeds = []
     monkeypatch.setattr(pipeline, "seed_everything", lambda seed: seeds.append(seed))
 
+    ddim_steps = []
+
     class FakeModel:
         def __init__(self):
             self.calls = 0
 
-        def generate_batch(self, batch, **_kwargs):
+        def generate_batch(self, batch, **kwargs):
             self.calls += 1
+            ddim_steps.append(kwargs["ddim_steps"])
             return torch.full((1, 1, 5), float(self.calls))
 
     model = FakeModel()
     result = pipeline.super_resolution(model, "input.wav", seed=17)
 
     assert model.calls == 2
+    assert ddim_steps == [50, 50]
     assert seeds == [17, 17]
     assert result.shape == (1, 2, 3)
     np.testing.assert_array_equal(result[0, 0], np.ones(3))
@@ -245,6 +278,7 @@ def test_super_resolution_batch_groups_once_and_trims(monkeypatch):
     assert calls[0][0]["waveform"].shape == (2, 1, pipeline._SEGMENT_SAMPLES)
     assert calls[0][1]["sampler"] == "ddim"
     assert calls[0][1]["ddim_eta"] == 1.0
+    assert calls[0][1]["ddim_steps"] == 50
     assert padded == [
         (3, pipeline._SEGMENT_SAMPLES, False, "ellip"),
         (7, pipeline._SEGMENT_SAMPLES, False, "ellip"),
@@ -277,8 +311,11 @@ def test_long_audio_stereo_short_tail_and_exact_length(monkeypatch):
         pipeline, "_select_lowpass_filter_type", lambda seed=None: "bessel"
     )
 
+    generated_steps = []
+
     class FakeModel:
-        def generate_batch(self, *_args, **_kwargs):
+        def generate_batch(self, *_args, **kwargs):
+            generated_steps.append(kwargs["ddim_steps"])
             return torch.ones(1, 1, 16)
 
     result = pipeline.super_resolution_long_audio(
@@ -290,7 +327,8 @@ def test_long_audio_stereo_short_tail_and_exact_length(monkeypatch):
 
     assert result.shape == (1, 2, 8)
     assert torch.isfinite(result).all()
-    assert filter_types == ["bessel"] * 8
+    assert filter_types == ["bessel"] * 4
+    assert generated_steps == [50] * 4
 
 
 @pytest.mark.parametrize(

@@ -368,6 +368,15 @@ def _is_accelerator_out_of_memory(error):
 def _clear_accelerator_cache():
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
+    mps_backend = getattr(torch.backends, "mps", None)
+    mps_module = getattr(torch, "mps", None)
+    if (
+        mps_backend is not None
+        and mps_module is not None
+        and mps_backend.is_available()
+        and callable(getattr(mps_module, "empty_cache", None))
+    ):
+        mps_module.empty_cache()
 
 
 def _generate_long_audio_batch(
@@ -608,7 +617,7 @@ def super_resolution(
     latent_diffusion,
     input_file,
     seed=42,
-    ddim_steps=200,
+    ddim_steps=50,
     guidance_scale=3.5,
     latent_t_per_second=12.8,
     config=None,
@@ -656,7 +665,7 @@ def super_resolution_long_audio(
     latent_diffusion,
     input_file,
     seed=42,
-    ddim_steps=200,
+    ddim_steps=50,
     guidance_scale=3.5,
     chunk_duration_s=15,
     overlap_duration_s=2,
@@ -722,6 +731,8 @@ def super_resolution_long_audio(
                     torch.max(torch.abs(chunk)) + 1e-8,
                 )
             )
+            if end_sample == total_samples:
+                break
 
         if batch_size == 1:
             for start_sample, end_sample, chunk, original_peak in chunk_records:
@@ -786,7 +797,7 @@ def super_resolution_batch(
     latent_diffusion,
     waveforms_list,
     seed=42,
-    ddim_steps=200,
+    ddim_steps=50,
     guidance_scale=3.5,
     lowpass_seed=None,
     sampler=DEFAULT_SAMPLER,

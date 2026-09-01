@@ -11,6 +11,7 @@ from audiosr.latent_diffusion.modules.distributions.distributions import (
 )
 import soundfile as sf
 
+from audiosr.checkpoint import load_checkpoint
 from audiosr.utilities.model import get_vocoder
 from audiosr.utilities.tools import synth_one_sample
 
@@ -90,7 +91,8 @@ class AutoencoderKL(nn.Module):
         self.logger_exp_name = exp_name
 
     def init_from_ckpt(self, path, ignore_keys=list()):
-        sd = torch.load(path, map_location="cpu")["state_dict"]
+        checkpoint = load_checkpoint(path, map_location="cpu")
+        sd = checkpoint.get("state_dict", checkpoint)
         keys = list(sd.keys())
         for k in keys:
             for ik in ignore_keys:

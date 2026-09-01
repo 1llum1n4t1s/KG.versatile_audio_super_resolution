@@ -102,6 +102,43 @@ def test_import_does_not_launch_and_interface_keeps_batch_controls(monkeypatch):
     ]
     assert len(seed_inputs) == 1
     assert seed_inputs[0].kwargs["value"] == 42
+    ddim_inputs = [
+        component
+        for component in interface.kwargs["inputs"]
+        if component.kwargs.get("label") == "DDIM Steps"
+    ]
+    assert len(ddim_inputs) == 1
+    assert ddim_inputs[0].kwargs["value"] == 50
+
+
+def test_normalize_audio_preserves_level_unless_peak_exceeds_one(monkeypatch):
+    app, _librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    quiet = np.array([-0.25, 0.5], dtype=np.float32)
+    loud = np.array([-2.0, 1.0], dtype=np.float32)
+
+    np.testing.assert_array_equal(app.normalize_audio(quiet), quiet)
+    np.testing.assert_array_equal(
+        app.normalize_audio(loud), np.array([-1.0, 0.5], dtype=np.float32)
+    )
+
+
+def test_release_cached_model_clears_mps_cache(monkeypatch):
+    app, _librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    cache_calls = []
+    fake_torch = types.SimpleNamespace(
+        cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None),
+        backends=types.SimpleNamespace(
+            mps=types.SimpleNamespace(is_available=lambda: True)
+        ),
+        mps=types.SimpleNamespace(empty_cache=lambda: cache_calls.append("mps")),
+    )
+    monkeypatch.setitem(sys.modules, "torch", fake_torch)
+    app._MODEL_CACHE["basic"] = object()
+
+    app._release_cached_model()
+
+    assert app._MODEL_CACHE == {}
+    assert cache_calls == ["mps"]
 
 
 def test_process_audio_channel_groups_batches_and_preserves_order(monkeypatch):
@@ -119,7 +156,7 @@ def test_process_audio_channel_groups_batches_and_preserves_order(monkeypatch):
     assert output.shape == source.shape
 
 
-def test_short_final_chunk_uses_effective_overlap_without_broadcast_error(monkeypatch):
+def test_chunk_reaching_eof_is_not_followed_by_contained_tail(monkeypatch):
     app, _librosa, calls, _fake_gradio = _load_app(monkeypatch)
     source = np.ones(470, dtype=np.float32)
 
@@ -127,10 +164,10 @@ def test_short_final_chunk_uses_effective_overlap_without_broadcast_error(monkey
         object(), source, sr=100, guidance_scale=2.6, ddim_steps=100, batch_size=1
     )
 
-    # chunk=510 samples, step=460, so the final 10-sample chunk is shorter
-    # than the requested 50-sample overlap.
-    assert [len(call["chunks"][0]) for call in calls] == [470, 10]
+    # chunk=510 samples, so the first chunk already contains the entire input.
+    assert [len(call["chunks"][0]) for call in calls] == [470]
     assert output.shape == source.shape
+    np.testing.assert_array_equal(output, source)
 
 
 def test_process_chunk_flattens_legacy_batch_axis_and_trims(monkeypatch):

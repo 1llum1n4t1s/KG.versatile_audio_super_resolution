@@ -1,3 +1,6 @@
+import os
+import random
+
 import numpy as np
 import pytest
 import soundfile as sf
@@ -106,6 +109,23 @@ def test_lowpass_uses_explicit_filter_type(monkeypatch):
 
     assert filter_types == ["ellip"]
     torch.testing.assert_close(result, waveform)
+
+
+@pytest.mark.parametrize("seed,equivalent", [(-1, 2**32 - 1), (2**32, 0)])
+def test_seed_helpers_normalize_arbitrary_integers(seed, equivalent):
+    utils.seed_everything(seed)
+    actual = (random.random(), np.random.random(), torch.rand(3))
+
+    assert os.environ["PYTHONHASHSEED"] == str(equivalent)
+    assert utils._select_lowpass_filter_type(seed) == utils._select_lowpass_filter_type(
+        equivalent
+    )
+
+    utils.seed_everything(equivalent)
+    expected = (random.random(), np.random.random(), torch.rand(3))
+
+    assert actual[:2] == expected[:2]
+    torch.testing.assert_close(actual[2], expected[2])
 
 
 @pytest.mark.parametrize("suffix", [".wav", ".flac"])

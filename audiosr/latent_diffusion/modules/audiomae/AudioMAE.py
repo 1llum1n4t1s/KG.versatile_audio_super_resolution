@@ -81,11 +81,6 @@ class AudioMAE(nn.Module):
             torch.zeros(1, num_patches + 1, emb_dim), requires_grad=False
         )  # fixed sin-cos embedding
 
-        # checkpoint_path = '/mnt/bn/data-xubo/project/Masked_AudioEncoder/checkpoint/finetuned.pth'
-        # checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        # msg = model.load_state_dict(checkpoint['model'], strict=False)
-        # print(f'Load AudioMAE from {checkpoint_path} / message: {msg}')
-
         self.model = model
 
     def forward(self, x, mask_t_prob=0.0, mask_f_prob=0.0):
@@ -107,13 +102,6 @@ class Vanilla_AudioMAE(nn.Module):
         model = models_mae.__dict__["mae_vit_base_patch16"](
             in_chans=1, audio_exp=True, img_size=(1024, 128)
         )
-
-        # checkpoint_path = '/mnt/bn/lqhaoheliu/exps/checkpoints/audiomae/pretrained.pth'
-        # checkpoint = torch.load(checkpoint_path, map_location='cpu')
-        # msg = model.load_state_dict(checkpoint['model'], strict=False)
-
-        # Skip the missing keys of decoder modules (not required)
-        # print(f'Load AudioMAE from {checkpoint_path} / message: {msg}')
 
         self.model = model.eval()
 

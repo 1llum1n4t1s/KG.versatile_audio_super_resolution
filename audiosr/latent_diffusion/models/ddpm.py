@@ -39,6 +39,8 @@ from audiosr.sampling import (
 import soundfile as sf
 import os
 
+from audiosr.checkpoint import load_checkpoint
+
 __conditioning_keys__ = {"concat": "c_concat", "crossattn": "c_crossattn", "adm": "y"}
 
 # Analysis parameters for the band-replacement stage. They match the librosa
@@ -315,7 +317,7 @@ class DDPM(nn.Module):
                 #     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list(), only_model=False):
-        sd = torch.load(path, map_location="cpu")
+        sd = load_checkpoint(path, map_location="cpu")
         if "state_dict" in list(sd.keys()):
             sd = sd["state_dict"]
         keys = list(sd.keys())
@@ -1532,7 +1534,7 @@ class LatentDiffusion(DDPM):
     def generate_batch(
         self,
         batch,
-        ddim_steps=200,
+        ddim_steps=50,
         ddim_eta=1.0,
         x_T=None,
         n_gen=1,
