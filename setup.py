@@ -27,7 +27,7 @@ AUTHOR = "Haohe Liu"
 MAINTAINER = "Kagayoi"
 MAINTAINER_EMAIL = "contact@kagayoi.com"
 REQUIRES_PYTHON = ">=3.10,<3.15"
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 # What packages are required for this module to be executed?
 REQUIRED = [

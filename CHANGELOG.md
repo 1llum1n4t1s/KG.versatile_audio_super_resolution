@@ -6,6 +6,8 @@ The upstream project history before this fork remains available in the
 
 ## [Unreleased]
 
+## [1.0.3] - 2026-09-01
+
 ### Added
 
 - Added a `dpmpp2m` sampler that integrates the probability-flow ODE with

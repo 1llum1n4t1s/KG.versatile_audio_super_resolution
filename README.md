@@ -12,13 +12,13 @@
 > **This is an independently maintained fork.** Development, issues, and
 > releases are managed here rather than by the upstream project.
 
-[![Version](https://img.shields.io/badge/version-1.0.2-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.3-blue.svg?style=flat-square)](CHANGELOG.md)
 [![PyPI](https://img.shields.io/pypi/v/kagayoi-audiosr?style=flat-square)](https://pypi.org/project/kagayoi-audiosr/)
 [![Python](https://img.shields.io/badge/python-3.10--3.14-blue.svg?style=flat-square)](setup.py)
 [![arXiv](https://img.shields.io/badge/upstream_arXiv-2309.07314-brightgreen.svg?style=flat-square)](https://arxiv.org/abs/2309.07314)
 [![Upstream samples](https://img.shields.io/badge/upstream-audio_samples-blue?logo=Github&style=flat-square)](https://audioldm.github.io/audiosr)
 
-Current fork release: **1.0.2**. See the [changelog](CHANGELOG.md) for details.
+Current fork release: **1.0.3**. See the [changelog](CHANGELOG.md) for details.
 
 AudioSR restores high-frequency detail from a low-pass audio condition and writes a 48 kHz result. It works with many kinds of audio, including music, speech, and environmental recordings.
 
