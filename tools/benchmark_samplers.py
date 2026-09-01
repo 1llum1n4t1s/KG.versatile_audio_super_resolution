@@ -36,6 +36,7 @@ _SAMPLE_RATE = 48000
 _LSD_N_FFT = 2048
 _LSD_HOP = 512
 _LSD_FLOOR = 1e-8
+_ENVELOPE_BANDS_PER_OCTAVE = 3
 # How far below the reference's loudest bin still counts as content rather than
 # the recording's noise floor.
 _REFERENCE_FLOOR_MARGIN_DB = 10.0
@@ -149,6 +150,11 @@ def build_parser():
         type=Path,
         default=None,
         help="Optional path for a machine-readable copy of the results.",
+    )
+    parser.add_argument(
+        "--no_spectrograms",
+        action="store_true",
+        help="Skip the per-configuration spectrogram sheets with diff maps.",
     )
     parser.add_argument(
         "--skip_warmup",
@@ -296,6 +302,157 @@ def scored_band_distance(reference, estimate, low_bin, high_bin):
     return float(torch.mean(torch.sqrt(torch.mean(band, dim=0))))
 
 
+def _envelope_band_edges(low_bin, high_bin, bands_per_octave=_ENVELOPE_BANDS_PER_OCTAVE):
+    """Return log-spaced bin edges covering ``low_bin``..``high_bin`` inclusive."""
+    ratio = 2.0 ** (1.0 / bands_per_octave)
+    edges = [low_bin]
+    position = float(low_bin)
+    while True:
+        position = max(position * ratio, position + 1.0)
+        if position >= high_bin:
+            break
+        edges.append(int(round(position)))
+    edges.append(high_bin + 1)
+    return edges
+
+
+def envelope_band_distance(reference, estimate, low_bin, high_bin):
+    """Return the log distance between fractional-octave energy envelopes.
+
+    The per-bin distance requires the estimate to match the reference bin by
+    bin, which noise cannot do even when restored correctly: two draws of the
+    same fricative or applause differ in every bin while sounding the same, so
+    a correct restoration scores no better than silence. What stays judgeable
+    for such material is whether the right amount of energy is in the right
+    band at the right time, which is what this measures. For tonal material the
+    two metrics agree in direction; for noisy material only this one can tell a
+    restoration from nothing.
+    """
+    import torch
+
+    length = min(reference.shape[-1], estimate.shape[-1])
+    reference_magnitude = _magnitude(reference[..., :length])
+    estimate_magnitude = _magnitude(estimate[..., :length])
+    frames = min(reference_magnitude.shape[-1], estimate_magnitude.shape[-1])
+    edges = _envelope_band_edges(low_bin, high_bin)
+
+    def band_power(magnitude):
+        power = magnitude[:, :frames] ** 2
+        return torch.stack(
+            [power[start:stop].mean(dim=0) for start, stop in zip(edges, edges[1:])]
+        )
+
+    error = (
+        torch.log10(band_power(reference_magnitude) + _LSD_FLOOR)
+        - torch.log10(band_power(estimate_magnitude) + _LSD_FLOOR)
+    ) ** 2
+    return float(torch.mean(torch.sqrt(torch.mean(error, dim=0))))
+
+
+def quiet_frame_excess_db(reference, estimate, low_bin, high_bin, quantile=0.25):
+    """Return how much energy the estimate adds where the reference is quiet.
+
+    The model's worst measured habit is filling the reference's quiet moments
+    with hiss, which both distances dilute across the whole clip. This isolates
+    it: frames are ranked by the reference's own energy inside the scored band,
+    the quietest quarter is kept, and the result is the mean level difference
+    there in dB. Positive means noise was added where the reference had little
+    or none; zero means the quiet moments were left alone.
+    """
+    import torch
+
+    length = min(reference.shape[-1], estimate.shape[-1])
+    reference_magnitude = _magnitude(reference[..., :length])
+    estimate_magnitude = _magnitude(estimate[..., :length])
+    frames = min(reference_magnitude.shape[-1], estimate_magnitude.shape[-1])
+    reference_band = reference_magnitude[low_bin : high_bin + 1, :frames] ** 2
+    estimate_band = estimate_magnitude[low_bin : high_bin + 1, :frames] ** 2
+
+    frame_power = reference_band.mean(dim=0)
+    threshold = torch.quantile(frame_power, quantile)
+    quiet = frame_power <= threshold
+    if int(quiet.sum()) == 0:
+        return float("nan")
+
+    excess = 10.0 * (
+        torch.log10(estimate_band.mean(dim=0)[quiet] + _LSD_FLOOR)
+        - torch.log10(frame_power[quiet] + _LSD_FLOOR)
+    )
+    return float(excess.mean())
+
+
+def write_spectrogram_sheet(path, rows, reference_index=0, sheet_title=""):
+    """Write stacked spectrograms plus a diff map against the reference row.
+
+    The filled-in look alone cannot judge a restoration: wrong content fills a
+    spectrogram as convincingly as right content. The sheet therefore ends with
+    the signed difference against the reference, where red is energy the
+    restoration added beyond the reference and blue is structure it missed.
+    Returns the path, or None when matplotlib is unavailable.
+    """
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib is not installed; skipping the spectrogram sheet")
+        return None
+    import torch
+
+    def decibels(waveform):
+        spectrum = torch.stft(
+            _unit_rms(waveform.flatten()),
+            n_fft=_LSD_N_FFT,
+            hop_length=_LSD_HOP,
+            window=torch.hann_window(_LSD_N_FFT, periodic=True),
+            center=True,
+            return_complex=True,
+        ).abs()
+        return (20.0 * torch.log10(spectrum + 1e-10)).numpy()
+
+    panels = [(label, decibels(waveform)) for label, waveform in rows]
+    peak = max(panel.max() for _label, panel in panels)
+    seconds = rows[0][1].shape[-1] / _SAMPLE_RATE
+
+    total = len(panels) + (len(panels) - 1 if reference_index is not None else 0)
+    figure, axes = plt.subplots(
+        total, 1, figsize=(11, 2.2 * total), constrained_layout=True
+    )
+    axes = [axes] if total == 1 else list(axes)
+    for axis, (label, panel) in zip(axes, panels):
+        image = axis.imshow(
+            panel - peak, origin="lower", aspect="auto", cmap="magma",
+            vmin=-80, vmax=0, extent=[0, seconds, 0, _SAMPLE_RATE / 2000],
+        )
+        axis.set_ylabel("kHz")
+        axis.set_title(label, loc="left", fontsize=10)
+    figure.colorbar(image, ax=axes[: len(panels)], label="dB", shrink=0.9)
+
+    if reference_index is not None:
+        reference_panel = panels[reference_index][1]
+        others = [pair for i, pair in enumerate(panels) if i != reference_index]
+        for axis, (label, panel) in zip(axes[len(panels):], others):
+            frames = min(panel.shape[-1], reference_panel.shape[-1])
+            image = axis.imshow(
+                panel[:, :frames] - reference_panel[:, :frames],
+                origin="lower", aspect="auto", cmap="coolwarm",
+                vmin=-30, vmax=30, extent=[0, seconds, 0, _SAMPLE_RATE / 2000],
+            )
+            axis.set_ylabel("kHz")
+            axis.set_title(f"{label} - reference", loc="left", fontsize=10)
+        figure.colorbar(
+            image, ax=axes[len(panels):],
+            label="dB vs reference (red = excess)", shrink=0.9,
+        )
+    axes[-1].set_xlabel("seconds")
+    if sheet_title:
+        figure.suptitle(sheet_title, fontsize=12)
+    figure.savefig(path, dpi=110)
+    plt.close(figure)
+    return os.fspath(path)
+
+
 def band_energy_ratios(reference, estimate, low_bin, high_bin):
     """Return in-band and above-reference energy, relative to the scored band.
 
@@ -371,10 +528,13 @@ def main(argv=None):
         )
 
     baseline_lsd = scored_band_distance(reference, degraded, low_bin, high_bin)
+    baseline_env = envelope_band_distance(reference, degraded, low_bin, high_bin)
     baseline_band, _ = band_energy_ratios(reference, degraded, low_bin, high_bin)
+    baseline_quiet = quiet_frame_excess_db(reference, degraded, low_bin, high_bin)
     print(
-        f"degraded input baseline: lsd={baseline_lsd:.3f} band_energy="
-        f"{baseline_band:.3f} (a restoration must beat this lsd to be worth it)"
+        f"degraded input baseline: lsd={baseline_lsd:.3f} env={baseline_env:.3f} "
+        f"band_energy={baseline_band:.3f} quiet_xs={baseline_quiet:+.1f}dB "
+        f"(a restoration must beat these to be worth it)"
     )
 
     model = build_model(
@@ -421,9 +581,11 @@ def main(argv=None):
             1, -1
         )
         lsd = scored_band_distance(reference, restored, low_bin, high_bin)
+        envelope = envelope_band_distance(reference, restored, low_bin, high_bin)
         band_energy, above_reference = band_energy_ratios(
             reference, restored, low_bin, high_bin
         )
+        quiet_excess = quiet_frame_excess_db(reference, restored, low_bin, high_bin)
         seconds = statistics.median(elapsed)
 
         output_path = args.output_dir / f"restored_{label.replace('/', '_')}.wav"
@@ -444,42 +606,60 @@ def main(argv=None):
                 "seconds": seconds,
                 "realtime_factor": duration_s / seconds if seconds > 0 else float("inf"),
                 "lsd": lsd,
+                "envelope": envelope,
                 "band_energy": band_energy,
                 "above_reference": above_reference,
+                "quiet_excess_db": quiet_excess,
                 "output": os.fspath(output_path),
             }
         )
+        if not args.no_spectrograms:
+            sheet_path = write_spectrogram_sheet(
+                args.output_dir / f"spectrogram_{label.replace('/', '_')}.png",
+                [
+                    ("reference", reference),
+                    ("degraded input", degraded),
+                    (label, restored),
+                ],
+                sheet_title=f"{label}  lsd={lsd:.3f} env={envelope:.3f} "
+                f"quiet_xs={quiet_excess:+.1f}dB",
+            )
+            if sheet_path:
+                results[-1]["spectrogram"] = sheet_path
         print(
             f"  {label:<30} {seconds:8.2f}s  x{duration_s / seconds:6.2f} realtime  "
-            f"lsd={lsd:6.3f}  band_energy={band_energy:7.3f}  "
-            f"above_ref={above_reference:6.3f}"
+            f"lsd={lsd:6.3f}  env={envelope:6.3f}  band_energy={band_energy:7.3f}  "
+            f"above_ref={above_reference:6.3f}  quiet_xs={quiet_excess:+6.1f}dB"
         )
 
     print()
     header = (
-        f"{'config':<30}{'seconds':>10}{'xRT':>8}{'lsd':>9}"
-        f"{'band_energy':>13}{'above_ref':>11}"
+        f"{'config':<30}{'seconds':>10}{'xRT':>8}{'lsd':>9}{'env':>9}"
+        f"{'band_energy':>13}{'above_ref':>11}{'quiet_xs':>10}"
     )
     print(header)
     print("-" * len(header))
     print(
         f"{'[degraded input]':<30}{'':>10}{'':>8}{baseline_lsd:>9.3f}"
-        f"{baseline_band:>13.3f}{0.0:>11.3f}"
+        f"{baseline_env:>9.3f}{baseline_band:>13.3f}{0.0:>11.3f}"
+        f"{baseline_quiet:>+10.1f}"
     )
-    for row in sorted(results, key=lambda item: item["lsd"]):
+    for row in sorted(results, key=lambda item: item["envelope"]):
         print(
             f"{row['config']:<30}{row['seconds']:>10.2f}{row['realtime_factor']:>8.2f}"
-            f"{row['lsd']:>9.3f}{row['band_energy']:>13.3f}{row['above_reference']:>11.3f}"
+            f"{row['lsd']:>9.3f}{row['envelope']:>9.3f}{row['band_energy']:>13.3f}"
+            f"{row['above_reference']:>11.3f}{row['quiet_excess_db']:>+10.1f}"
         )
 
-    if ranking_is_unresolved(baseline_lsd, [row["lsd"] for row in results]):
+    if ranking_is_unresolved(
+        baseline_lsd, [row["lsd"] for row in results]
+    ) and ranking_is_unresolved(baseline_env, [row["envelope"] for row in results]):
         print()
         print(
             "WARNING: no configuration beat the degraded input by a useful "
-            f"margin ({_MIN_USEFUL_IMPROVEMENT:.0%}) inside the scored band. "
-            "The reference cannot separate these configurations; treat the "
-            "ranking as unresolved and measure against material whose missing "
-            "band carries structure rather than noise."
+            f"margin ({_MIN_USEFUL_IMPROVEMENT:.0%}) on either metric inside "
+            "the scored band. The reference cannot separate these "
+            "configurations; treat the ranking as unresolved."
         )
 
     if args.json_report is not None:
@@ -494,7 +674,12 @@ def main(argv=None):
                     "guidance_scale": args.guidance_scale,
                     "seed": args.seed,
                     "scored_band_hz": [args.cutoff_hz, high_bin * bin_hz],
-                    "baseline": {"lsd": baseline_lsd, "band_energy": baseline_band},
+                    "baseline": {
+                        "lsd": baseline_lsd,
+                        "envelope": baseline_env,
+                        "band_energy": baseline_band,
+                        "quiet_excess_db": baseline_quiet,
+                    },
                     "results": results,
                 },
                 indent=2,

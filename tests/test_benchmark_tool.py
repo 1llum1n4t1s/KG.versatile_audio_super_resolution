@@ -238,3 +238,124 @@ def test_a_hairs_width_win_does_not_count_as_a_result(tool):
 
 def test_an_empty_run_is_unresolved(tool):
     assert tool.ranking_is_unresolved(1.0, [])
+
+
+def _band_noise(seed, low_bin, high_bin, frames=100, n_fft=2048, hop=512):
+    """Noise confined to low_bin..high_bin, built in the transform domain."""
+    generator = torch.Generator().manual_seed(seed)
+    length = frames * hop
+    noise = torch.randn(length, generator=generator) * 0.1
+    window = torch.hann_window(n_fft)
+    spectrum = torch.stft(
+        noise, n_fft=n_fft, hop_length=hop, window=window, return_complex=True
+    )
+    spectrum[:low_bin] = 0
+    spectrum[high_bin + 1 :] = 0
+    return torch.istft(
+        spectrum, n_fft=n_fft, hop_length=hop, window=window, length=length
+    ).reshape(1, -1)
+
+
+def test_envelope_distance_is_zero_for_a_rescaled_copy(tool):
+    generator = torch.Generator().manual_seed(11)
+    waveform = torch.randn(1, 48000, generator=generator) * 0.1
+
+    assert tool.envelope_band_distance(waveform, waveform * 0.25, 100, 800) == (
+        pytest.approx(0.0, abs=1e-4)
+    )
+
+
+def test_envelope_distance_accepts_a_different_draw_of_the_same_noise(tool):
+    """The reason this metric exists.
+
+    Two draws of the same noise band share no bins, so the per-bin distance
+    scores the correct restoration as badly as silence. The envelope tells
+    them apart: the right energy in the right band scores near zero, silence
+    scores far worse.
+    """
+    reference = _band_noise(23, low_bin=200, high_bin=600)
+    other_draw = _band_noise(29, low_bin=200, high_bin=600)
+    silence = torch.zeros_like(reference)
+
+    envelope_other = tool.envelope_band_distance(reference, other_draw, 200, 600)
+    envelope_silence = tool.envelope_band_distance(reference, silence, 200, 600)
+    per_bin_other = tool.scored_band_distance(reference, other_draw, 200, 600)
+
+    assert envelope_other < 0.25 * envelope_silence
+    # The per-bin metric charges the correct restoration a large distance
+    # anyway, because no two draws agree bin by bin. The envelope does not.
+    assert per_bin_other > 5 * envelope_other
+
+
+def test_envelope_distance_penalizes_energy_in_the_wrong_band(tool):
+    reference = _band_noise(31, low_bin=200, high_bin=400)
+    wrong_band = _band_noise(37, low_bin=450, high_bin=650)
+    right_band = _band_noise(41, low_bin=200, high_bin=400)
+
+    right = tool.envelope_band_distance(reference, right_band, 200, 650)
+    wrong = tool.envelope_band_distance(reference, wrong_band, 200, 650)
+
+    assert right < 0.5 * wrong
+
+
+def test_envelope_band_edges_cover_the_range_without_gaps(tool):
+    edges = tool._envelope_band_edges(170, 630)
+
+    assert edges[0] == 170
+    assert edges[-1] == 631
+    widths = [stop - start for start, stop in zip(edges, edges[1:])]
+    assert all(width >= 1 for width in widths)
+    # Log spacing: the top band is wider than the bottom one.
+    assert widths[-1] > widths[0]
+
+
+def test_quiet_frame_excess_flags_noise_added_to_silence(tool):
+    """Hiss laid over the reference's silent half must read as positive dB."""
+    generator = torch.Generator().manual_seed(43)
+    loud = torch.randn(1, 24000, generator=generator) * 0.1
+    silence = torch.zeros(1, 24000)
+    reference = torch.cat([loud, silence], dim=-1)
+
+    hiss = torch.randn(1, 48000, generator=torch.Generator().manual_seed(47)) * 0.01
+    noisy = reference + hiss
+
+    added = tool.quiet_frame_excess_db(reference, noisy, 100, 800)
+    clean = tool.quiet_frame_excess_db(reference, reference, 100, 800)
+
+    assert added > 10.0
+    assert abs(clean) < 1.0
+
+
+def test_quiet_frame_excess_is_negative_for_a_muted_estimate(tool):
+    generator = torch.Generator().manual_seed(53)
+    reference = torch.randn(1, 48000, generator=generator) * 0.1
+
+    excess = tool.quiet_frame_excess_db(reference, reference * 0.1, 100, 800)
+
+    # A uniform level drop cannot register: both signals are normalized to
+    # unit RMS first, so only a change in distribution moves the number.
+    assert abs(excess) < 1.0
+
+
+def test_spectrogram_sheet_writes_a_png(tool, tmp_path):
+    pytest.importorskip("matplotlib")
+    generator = torch.Generator().manual_seed(59)
+    reference = torch.randn(1, 48000, generator=generator) * 0.1
+    restored = tool.degrade(reference, cutoff_hz=8000)
+
+    path = tool.write_spectrogram_sheet(
+        tmp_path / "sheet.png",
+        [("reference", reference), ("restored", restored)],
+        sheet_title="test",
+    )
+
+    assert path is not None
+    assert (tmp_path / "sheet.png").stat().st_size > 10_000
+
+
+def test_spectrogram_flag_is_accepted(tool):
+    parser = tool.build_parser()
+    args = parser.parse_args(
+        ["--reference", "r.wav", "--config", "ddim:4", "--no_spectrograms"]
+    )
+    assert args.no_spectrograms
