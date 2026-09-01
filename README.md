@@ -197,14 +197,22 @@ The most relevant options are:
 | `--ddim_steps` | `50` | Sampling steps from 1 to 1000. More steps usually take longer. |
 | `--sampler` | `ddim` | `ddim`, `dpmpp2m`, or `ddpm`. `dpmpp2m` needs far fewer steps. |
 | `--ddim_eta` | `1.0` | How stochastic each `ddim` update is: `0.0` is deterministic, `1.0` is fully ancestral. Only `ddim` uses it. |
-| `--discretize` | `uniform` | Timestep spacing: `uniform`, `trailing`, or `quad`. `trailing` measured better at every step count tried; `uniform` is the default for compatibility only. |
+| `--discretize` | `uniform` | Timestep spacing: `uniform`, `trailing`, or `quad`. Use `trailing` when lowering `--ddim_steps` to a divisor of 1000. |
 | `--preserve_input_rate` | off | Write at the input's own rate instead of 48 kHz, keeping whatever the input held above 24 kHz. |
+| `--calibration` | off | Path to a learned output calibration (`tools/train_calibration.py`). Tempers the model's measured 10-28 dB overshoot in the generated band. The package ships one at `audiosr.bundled_calibration_path()`. |
 | `-gs`, `--guidance_scale` | `3.5` | Strength of the low-pass audio conditioning. |
 | `--seed` | `42` | Integer seed for reproducible sampling. |
 | `--suffix` | `_AudioSR_Processed_48K` | Suffix appended to the output filename. |
 | `--chunking` | off | Enable long-audio chunking. |
 | `--chunk_duration` | `15` | Chunk length in seconds when chunking is enabled. |
 | `--overlap_duration` | `2` | Cross-fade overlap in seconds when chunking is enabled. |
+
+The bundled calibration (`audiosr/weights/calibration_v3.pt`) was trained on
+piano, synthesizer, and orchestra excerpts plus speech from the
+[つくよみちゃんコーパス](https://tyc.rei-yumesaki.net/material/corpus/)
+(CV.夢前黎) and [VCTK](https://datashare.ed.ac.uk/handle/10283/3443)
+(CC BY 4.0); no corpus audio is redistributed, only the 134 KB envelope
+predictor learned from it.
 
 Start `--guidance_scale` around 2.5–5.0 and adjust by ear. This guidance scale controls adherence to the low-pass audio condition; it is not a text prompt relevance or text-to-audio control. Memory use and speed vary with input length, sampling steps, selected device, and whether chunking is enabled.
 
@@ -218,17 +226,23 @@ network evaluations per step:
 python -m audiosr -i path/to/input.wav --sampler dpmpp2m --ddim_steps 30
 ```
 
-**Use `--discretize trailing`.** The default `uniform` spacing reaches the
-noisiest timestep only when the step count does not divide 1000; at 20, 25, 50,
-100 and other exact divisors it stops short. On a music reference, `trailing` at
-20 steps scored better than the 50-step default and ran 14% faster, and 12 steps
-matched it; `uniform` at 20 steps scored worse than not restoring at all. The
-default stays `uniform` so existing output does not change, not because it
-measured better:
+**Lowering the step count needs `--discretize trailing`.** The default
+`uniform` spacing reaches the noisiest timestep only when the step count does
+not divide 1000; at 20, 25, 50, 100 and other exact divisors it stops short, so
+sampling starts from pure noise against a schedule that still holds part of the
+signal: 7.5% of it at 20 steps, 2.8% at 50. On a music reference, `uniform` at
+20 steps scored worse than not restoring at all, while `trailing` at 20 scored
+best of everything tried and ran 14% faster, and 12 steps matched it:
 
 ```shell
 python -m audiosr -i path/to/input.wav --ddim_steps 20 --discretize trailing
 ```
+
+At the shipped 50 steps the shortfall is far smaller, and there the advantage
+did not survive a change of material: `trailing` measured better on piano and
+worse on speech. A difference that reverses with the material is not a basis for
+a default, so `uniform` stays, and this fork makes no general claim that
+`trailing` sounds better. Measure your own material before changing it.
 
 Which configuration wins depends on the material and the accelerator, so measure
 before settling on one. `tools/benchmark_samplers.py` degrades a high-quality
@@ -242,12 +256,19 @@ python tools/benchmark_samplers.py --reference reference.flac \
 ```
 
 Restorations are written to `--output_dir` so the same run can also feed a blind
-listening comparison. The reference must be a genuinely high-quality recording
-whose missing band carries structure rather than noise: harmonic material such
-as solo piano separates configurations cleanly, while speech does not, because
-the model can restore the right amount of fricative energy without restoring the
-right detail and a log-spectral distance cannot tell that from silence. The run
-warns when no configuration beat the degraded input by a useful margin.
+listening comparison. The reference must be a genuinely high-quality
+recording. Three numbers are reported per configuration: a per-bin
+log-spectral distance, which judges harmonic material such as solo piano
+cleanly; a fractional-octave envelope distance, which stays meaningful when
+the missing band is noise — fricatives, applause, cymbals — where no
+restoration can match the reference bin by bin; and `quiet_xs`, the dB the
+restoration adds to the reference's own quiet frames, which isolates hiss laid
+over pauses. Each configuration also gets a spectrogram sheet whose last row
+is a signed difference against the reference (red = added beyond the
+reference, blue = missed structure), since a filled-in spectrogram alone reads
+the same whether the content is right or wrong; `--no_spectrograms` skips the
+sheets. The run warns when no configuration beats the degraded input by a
+useful margin on either distance.
 
 ## Gradio demo
 

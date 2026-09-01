@@ -39,6 +39,23 @@ The upstream project history before this fork remains available in the
   preserved 96 kHz result is no longer labelled `48K`; an explicit `--suffix`
   is left alone.
 
+- Added a learned output calibration, off by default. Measured against
+  full-band references the model puts 10 to 28 dB too much energy into the
+  generated band, worst where the source is quiet, so pauses come back as hiss.
+  A small MLP trained on full-band recordings and their band-limited versions
+  (`tools/train_calibration.py`) predicts the envelope each fractional-octave
+  band should have from the source's own envelope, and `--calibration` rescales
+  the restoration toward that prediction inside clamped, smoothed gains. It
+  redistributes energy; it cannot invent content, and it never touches the band
+  the source itself carries. Inside sustained pauses — stretches the source
+  itself shows as silent, well below its loud frames, for around 200 ms or
+  more — the lower gain clamp opens from -24 dB toward -60 dB so the hiss the
+  model lays over silence can be pushed further down; material without pauses
+  passes through unchanged. The package ships a ready calibration at
+  `audiosr.bundled_calibration_path()`, trained across piano, synthesizer,
+  orchestra, and speech (つくよみちゃんコーパス CV.夢前黎, VCTK CC BY 4.0) so
+  that no gate material regresses.
+
 ### Changed
 
 - Added bounded long-audio chunk batching without reducing the requested DDIM
@@ -110,13 +127,31 @@ The upstream project history before this fork remains available in the
   nothing (1.499), so reducing the step count works, but only with `trailing`.
   `uniform` at 20 steps lost to the degraded input itself (3.270 against 3.189)
   and scattered energy above the reference's band at 1262 times the band's own
-  level. The defaults are unchanged for compatibility alone; there is no quality
-  argument for them.
+  level. Below a step count that divides 1000, `trailing` is not a preference
+  but the absence of a defect, and the same holds for every kind of material.
+  At the shipped 50 steps it is a preference, and it did not survive a change of
+  material: `trailing` measured better on piano and worse on speech. The
+  defaults are therefore unchanged, and this fork does not claim `trailing` is
+  generally better.
 - The same configurations measured against `example/speech.wav` separated by
   0.03%, with nothing beating the degraded input. A log-spectral distance cannot
   judge material whose missing band is noise: the model restores the right
   amount of energy without the right detail, which scores no better than
-  silence. References for this tool need a missing band that carries structure.
+  silence. The benchmark therefore also reports a fractional-octave envelope
+  distance, which accepts a different draw of the same noise and asks only
+  whether the right amount of energy is in the right band at the right time.
+  Re-scored on that metric, the speech restorations still measured worse than
+  the degraded input, so on that clip the model misplaces energy rather than
+  merely randomizing it; the piano ranking is unchanged on both metrics.
+- The benchmark also reports `quiet_xs`, the level in dB that a restoration
+  adds to the frames where the reference itself is quiet — the model's worst
+  measured habit is returning pauses as hiss, and both distances dilute that
+  across the whole clip. And unless `--no_spectrograms` is passed, every
+  configuration gets a spectrogram sheet ending in a signed difference map
+  against the reference, because a filled-in spectrogram alone cannot separate
+  right content from wrong: red is energy the restoration added beyond the
+  reference, blue is structure it missed. Sheet paths land in the JSON report
+  next to the numbers so an optimization loop can consume both.
 - The vocoder accounted for 82% of one call's wall clock on that machine, so
   step count moves total runtime much less there than the sampling share
   suggests.
