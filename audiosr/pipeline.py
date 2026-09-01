@@ -468,6 +468,42 @@ def _level_match_gain(source, reference, floor=1e-12):
     return (reference_power / source_power) ** 0.5
 
 
+def calibrate_output(generated, source_file, calibration_path):
+    """Return ``generated`` with the learned output calibration applied.
+
+    The calibration pulls the restored envelope toward what the source's own
+    envelope predicts, band by band and frame by frame, inside clamped gains.
+    It runs at the model rate and leaves the band the source itself carries
+    untouched, so it composes with ``restore_high_rate`` applied afterwards.
+    """
+    from audiosr import calibration as calibration_module
+
+    model = calibration_module.load_calibration(calibration_path)
+
+    restored = _as_generated_tensor(generated)
+    if restored.dim() == 3:
+        if restored.size(0) != 1:
+            raise ValueError(
+                "generated must hold a single item, got batch of "
+                f"{restored.size(0)}"
+            )
+        restored = restored[0]
+    if restored.dim() != 2:
+        raise ValueError(
+            "generated must have shape [channels, samples] or "
+            f"[1, channels, samples], got {tuple(restored.shape)}"
+        )
+
+    source, source_rate = load_audio(source_file, target_sample_rate=_SAMPLE_RATE)
+    if source_rate != _SAMPLE_RATE:
+        raise ValueError(
+            f"load_audio returned {source_rate} Hz; expected {_SAMPLE_RATE} Hz"
+        )
+
+    calibrated = calibration_module.apply_calibration(restored, source, model)
+    return calibrated.unsqueeze(0).cpu().numpy()
+
+
 def restore_high_rate(generated, source_file, target_sample_rate=None):
     """Return the restoration at the source's rate, keeping the source's top band.
 

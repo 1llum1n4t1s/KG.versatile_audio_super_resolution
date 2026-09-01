@@ -155,6 +155,16 @@ def build_parser():
         help="Overlap duration in seconds for long audio processing.",
     )
     parser.add_argument(
+        "--calibration",
+        type=str,
+        default=None,
+        help=(
+            "Path to a learned output calibration (tools/train_calibration.py). "
+            "Pulls the restored envelope toward what the source predicts; "
+            "off by default."
+        ),
+    )
+    parser.add_argument(
         "--preserve_input_rate",
         action="store_true",
         help=(
@@ -177,6 +187,7 @@ def main(argv=None):
     from audiosr import (
         build_model,
         get_time,
+        calibrate_output,
         read_list,
         restore_high_rate,
         save_wave,
@@ -234,6 +245,8 @@ def main(argv=None):
                 discretize=args.discretize,
                 latent_t_per_second=latent_t_per_second,
             )
+        if args.calibration is not None:
+            waveform = calibrate_output(waveform, input_file, args.calibration)
         output_rate = sample_rate
         if args.preserve_input_rate:
             waveform, output_rate = restore_high_rate(waveform, input_file)

@@ -70,6 +70,7 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
     fake_audiosr.get_time = Mock(return_value="timestamp")
     fake_audiosr.read_list = read_list
     fake_audiosr.restore_high_rate = Mock()
+    fake_audiosr.calibrate_output = Mock()
     fake_audiosr.save_wave = save_wave
     fake_audiosr.super_resolution = Mock()
     fake_audiosr.super_resolution_long_audio = super_resolution_long_audio
@@ -152,6 +153,7 @@ def test_main_forwards_standard_processing_arguments(monkeypatch, tmp_path):
     fake_audiosr.get_time = Mock(return_value="timestamp")
     fake_audiosr.read_list = Mock()
     fake_audiosr.restore_high_rate = Mock()
+    fake_audiosr.calibrate_output = Mock()
     fake_audiosr.save_wave = Mock()
     fake_audiosr.super_resolution = super_resolution
     fake_audiosr.super_resolution_long_audio = Mock()
@@ -271,6 +273,7 @@ def _fake_audiosr(super_resolution, restore_high_rate, save_wave):
     fake.get_time = Mock(return_value="timestamp")
     fake.read_list = Mock()
     fake.restore_high_rate = restore_high_rate
+    fake.calibrate_output = Mock()
     fake.save_wave = save_wave
     fake.super_resolution = super_resolution
     fake.super_resolution_long_audio = Mock()

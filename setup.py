@@ -113,6 +113,7 @@ setup(
     extras_require=EXTRAS,
     packages=find_packages(),
     include_package_data=True,
+    package_data={"audiosr": ["weights/*.pt"]},
     license="MIT",
     classifiers=[
         "Programming Language :: Python",

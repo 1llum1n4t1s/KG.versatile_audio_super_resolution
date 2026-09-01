@@ -23,6 +23,10 @@ _UTILS_EXPORTS = {
     "default_audioldm_config",
 }
 
+_CALIBRATION_EXPORTS = {
+    "bundled_calibration_path",
+}
+
 _PIPELINE_EXPORTS = {
     "seed_everything",
     "text2phoneme",
@@ -31,6 +35,7 @@ _PIPELINE_EXPORTS = {
     "make_batch_for_super_resolution",
     "round_up_duration",
     "restore_high_rate",
+    "calibrate_output",
     "build_model",
     "super_resolution",
     "super_resolution_long_audio",
@@ -39,6 +44,8 @@ _PIPELINE_EXPORTS = {
 
 __all__ = [
     "build_model",
+    "bundled_calibration_path",
+    "calibrate_output",
     "default_audioldm_config",
     "download_checkpoint",
     "extract_kaldi_fbank_feature",
@@ -67,6 +74,8 @@ __all__ = [
 def __getattr__(name):
     if name in _UTILS_EXPORTS:
         module = import_module(".utils", __name__)
+    elif name in _CALIBRATION_EXPORTS:
+        module = import_module(".calibration", __name__)
     elif name in _PIPELINE_EXPORTS:
         module = import_module(".pipeline", __name__)
     else:
