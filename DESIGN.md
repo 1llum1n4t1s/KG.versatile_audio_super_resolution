@@ -296,11 +296,10 @@ memory消費を避ける一方、最初の実モデル構築時にはAudioSR che
 同じなら取得時期によって重みが変わらないことを優先し、model更新はrevisionと回帰テストを
 明示的に同期する。利用者が指定したlocal checkpoint pathはこの固定対象外である。
 
-### 対応Pythonに応じてLibrosaを選択する
+### Python 3.14でLibrosa 1系を使う
 
-通常環境のLibrosaは、Python 3.10 / 3.11では0.11系、Python 3.12以降では1系を環境マーカーで
-選択する。単一バージョン範囲よりmanifestは複雑になるが、対応Pythonの下限を維持しながら
-新しいPythonでは現行メジャーを利用できる。
+対応Pythonを3.14へ統一し、通常環境のLibrosaは1系を使う。旧Python向けの環境マーカーを
+持たず、`requirements.txt`と`setup.py`の直接依存を同じ単一範囲に保つ。
 
 ### 配布名とPython APIを分離する
 

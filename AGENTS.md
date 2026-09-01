@@ -6,19 +6,18 @@
 
 ## 環境と依存管理
 
-- 対応Pythonは3.10以上3.15未満。通常の開発にはPython 3.12または3.13を使う。
+- 対応Pythonは3.14以上3.15未満。通常の開発にはPython 3.14を使う。
 - PyTorch、TorchVision、TorchAudioはOS・アクセラレータに合う公式wheelを先に導入する。
   固定したCUDA indexを通常の`requirements.txt`へ追加しない。
 - 通常環境の直接依存は`requirements.txt`と`setup.py`の`REQUIRED`を同期する。
   テスト依存は`setup.py`の`EXTRAS["test"]`が正本である。
 - PyPI配布名は`kagayoi-audiosr`、Python import名とCLI名は`audiosr`である。
   配布名を変更するときは`setup.py`、READMEの導入手順、package metadataテストを同期する。
-- LibrosaはPython 3.10 / 3.11で0.11系、Python 3.12以降で1系を選ぶ環境マーカーを
-  `requirements.txt`と`setup.py`で同期し、対応Python範囲全体を解決可能に保つ。
+- Librosaは1系を`requirements.txt`と`setup.py`で同期し、Python 3.14で解決可能に保つ。
 - 製品バージョンの正本は`setup.py`の`VERSION`。明示的なバージョン依頼時だけ更新し、
   READMEの現行版表記、CHANGELOG、メタデータテストを同期する。
 - lock fileは現在コミットしていない。新しいpackage managerやlock形式へ移行するときは、
-  Python 3.10〜3.14とCPU/CUDA/macOSの解決方法を同時に定義する。
+  Python 3.14とCPU/CUDA/macOSの解決方法を同時に定義する。
 
 ## 実装上の不変条件
 
@@ -60,12 +59,9 @@
 
 ```powershell
 $env:PYTHONPATH = (Get-Location).Path
-uv run --isolated --no-project --python 3.13 `
+uv run --isolated --no-project --python 3.14 `
   --with-requirements requirements.txt --with pytest==9.1.1 pytest -q
 ```
-
-Python・依存・パッケージ境界を変更した場合は、同じコマンドを`--python 3.10`と
-`--python 3.14`でも実行する。
 
 ```powershell
 uvx ruff check --select E9,F63,F7,F82 app.py setup.py audiosr tests
