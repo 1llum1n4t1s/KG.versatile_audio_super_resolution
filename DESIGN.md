@@ -20,6 +20,7 @@
 | --- | --- |
 | `audiosr/__init__.py` | 公開APIを遅延exportし、軽量importを維持する。 |
 | `audiosr/__main__.py` | `python -m audiosr`と`audiosr`コマンドの引数検証、モデル共有、ファイル反復、保存を行う。 |
+| `audiosr/checkpoint.py` | PyTorchのtensor-only読込とSafetensorsの形式分岐を共通化する。 |
 | `audiosr/pipeline.py` | device選択、checkpoint読込、特徴batch生成、標準・長尺・batch推論を統括する。 |
 | `audiosr/utils.py` | SoundFile読込、48 kHz resampling、正規化、STFT/mel、低域条件、checkpoint取得、出力保存を担う。 |
 | `audiosr/lowpass.py` | 推論条件用の低域通過フィルタと出力長整列を行う。 |
@@ -74,6 +75,7 @@
 - samplerを変えてもnetwork評価回数はstep数と一致させ、到達する終端SNRも同じalpha列に揃える。
 - 同じseedと入力は再現可能にしつつ、Gradioの別batch・別チャンネルは異なる生成seedを使う。
   低域filterの種類は記録・チャンネル単位で固定し、chunk境界では変えない。
+- 公開入口の任意整数seedは2の32乗を法として正規化し、同じ剰余なら同じ乱数系列を使う。
 - checkpointの形式を拡張子で判別し、pickle由来checkpointは`weights_only=True`で読む。
 - 自動取得する`basic`と`speech`のcheckpointは、検証済みHugging Face revisionへ固定する。
 - package importとCLI helpはネットワーク、checkpoint、tokenizer、GPU初期化を要求しない。
