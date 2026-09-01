@@ -16,3 +16,6 @@ build*
 *.safetensors
 dist/
 *DS_Store*
+
+# 同梱する較正重み（134 KB）は追跡する。チェックポイント全般の除外は維持する。
+!audiosr/weights/calibration_v3.pt
