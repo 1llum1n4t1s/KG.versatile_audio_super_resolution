@@ -289,3 +289,45 @@ This is the first independently maintained release of
 - The `basic` and `speech` checkpoints are each approximately 6.18 GB.
 - DirectML is not supported, and Apple MPS availability depends on the installed
   PyTorch build and hardware.
+
+## [0.1.0] — Git 記録日: 2023-09-07
+
+- 上流 AudioSR の初期構成。モデル・音声処理・デモ画面を追加。後続の上流履歴では 0.0.x の版番号を使用。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/1309a3b0cee07cebbb8771dc53e56fedf6ffb4ea)。
+
+## [0.0.7] — Git 記録日: 2024-02-05
+
+- 上流 AudioSR の履歴。モデルのダウンロード先と音声前処理、ライセンス情報を更新。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/8d9542e80d7e83ff5dc4e4e88eb7b00974b153bd) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/420f712b83d5661d7e1ac179a533d18c1b9b3aae...8d9542e80d7e83ff5dc4e4e88eb7b00974b153bd)。
+
+## [0.0.6] — Git 記録日: 2023-10-26
+
+- 上流 AudioSR の履歴。入力ファイル一覧の指定を修正し、アップサンプリング後の無音部分を除去する処理を追加。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/420f712b83d5661d7e1ac179a533d18c1b9b3aae) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/593a03cbb010f23349badc5cba241624d3b133be...420f712b83d5661d7e1ac179a533d18c1b9b3aae)。
+
+## [0.0.5] — Git 記録日: 2023-09-24
+
+- 上流 AudioSR の履歴。ドットを含む入力ファイル名から正しく出力名を作るよう修正し、ほぼ無音の音声の処理を調整。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/593a03cbb010f23349badc5cba241624d3b133be) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/3d0779d4f75e743b3286905037ba93d5ea917c27...593a03cbb010f23349badc5cba241624d3b133be)。
+
+## [0.0.4] — Git 記録日: 2023-09-24
+
+- 上流 AudioSR の履歴。モジュールとしてのコマンド実行と Replicate 向けデモを追加し、音声処理を修正。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/3d0779d4f75e743b3286905037ba93d5ea917c27) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/98e1038f3c17fd2bed79fae428fec9b6276437c4...3d0779d4f75e743b3286905037ba93d5ea917c27)。
+
+## [0.0.3] — Git 記録日: 2023-09-16
+
+- 上流 AudioSR の履歴。DC オフセットと音声の長さに関する不具合を修正し、ライセンス表記を更新。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/98e1038f3c17fd2bed79fae428fec9b6276437c4) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/c2a9bb2457780e8140c5c1a055151c8bfff0d03f...98e1038f3c17fd2bed79fae428fec9b6276437c4)。
+
+## [0.0.1] — Git 記録日: 2023-09-07
+
+- 上流 AudioSR の履歴。初期のデモ画面と未使用の生成処理を整理し、配布構成を変更。
+
+出典: [版の記録](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/commit/c2a9bb2457780e8140c5c1a055151c8bfff0d03f) / [変更差分](https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/compare/1309a3b0cee07cebbb8771dc53e56fedf6ffb4ea...c2a9bb2457780e8140c5c1a055151c8bfff0d03f)。
