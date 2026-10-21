@@ -1,0 +1,33 @@
+name: "Dependency validation"
+"on":
+  pull_request:
+    types:
+      - "opened"
+      - "synchronize"
+      - "reopened"
+      - "ready_for_review"
+  workflow_dispatch: {}
+permissions:
+  contents: "read"
+jobs:
+  python:
+    if: "github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login == 'dependabot[bot]'"
+    runs-on: "ubuntu-latest"
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: "."
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      -
+        uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1"
+        with:
+          persist-credentials: false
+      -
+        uses: "actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1"
+        with:
+          python-version: "3.14"
+      -
+        run: "sudo apt-get update\nsudo apt-get install -y ffmpeg espeak-ng libsndfile1"
+      -
+        run: "python -m pip install --extra-index-url https://download.pytorch.org/whl/cpu \".[test]\"\npython -m pip check\npython -m pytest -q\npython -m compileall -q app.py setup.py audiosr tests\naudiosr --help"
