@@ -165,26 +165,6 @@ python -m audiosr -i path/to/input.wav -d mps
 python -m audiosr -i path/to/input.wav -d cpu
 ```
 
-### ROCm hardware verification
-
-The ROCm test is skipped during the normal CPU test suite. On a machine with an AMD ROCm PyTorch wheel installed, run the opt-in smoke test to verify real GPU kernels and AudioSR's automatic device selection:
-
-```powershell
-$env:AUDIOSR_RUN_ROCM_HARDWARE = "1"
-python -m pytest -q tests/test_rocm_hardware.py
-```
-
-To additionally download the basic checkpoint and perform an end-to-end AudioSR conversion, enable the slower full-inference test. It uses one DDIM step by default; set `AUDIOSR_ROCM_DDIM_STEPS` to exercise an application-specific value:
-
-```powershell
-$env:AUDIOSR_RUN_ROCM_FULL_INFERENCE = "1"
-$env:AUDIOSR_RUN_ROCM_HARDWARE = "1"
-$env:AUDIOSR_ROCM_DDIM_STEPS = "100"
-python -m pytest -q tests/test_rocm_hardware.py
-```
-
-The full-inference test is intentionally separate because it downloads a model of about 6.2 GB and requires substantially more memory than the kernel smoke test. If first-run MIOpen convolution tuning is too slow, setting `$env:MIOPEN_FIND_MODE = "FAST"` uses AMD's immediate fallback for faster startup at the cost of some GPU performance.
-
 ### Tuning and performance
 
 The most relevant options are:
@@ -195,6 +175,9 @@ The most relevant options are:
 | `-il`, `--input_file_list` | — | Text file containing one input path per line. |
 | `-s`, `--save_path` | `./output` | Parent directory for timestamped output. |
 | `--model_name` | `basic` | Checkpoint: `basic` or `speech`. |
+| `--ckpt-path` | automatic download | Local base checkpoint. |
+| `--config` | model default | Model configuration YAML for a local base. |
+| `--lora` | off | Codec-restoration Safetensors adapter; requires the exact base checkpoint and configuration used for training. See [adapter usage](docs/lora_training.md#apply-an-adapter). |
 | `-d`, `--device` | `auto` | `auto`, `cpu`, `cuda`, `cuda:N`, or `mps`. |
 | `--ddim_steps` | `50` | Sampling steps from 1 to 1000. More steps usually take longer. |
 | `--sampler` | `ddim` | `ddim`, `dpmpp2m`, or `ddpm`. `dpmpp2m` needs far fewer steps. |
@@ -246,31 +229,8 @@ worse on speech. A difference that reverses with the material is not a basis for
 a default, so `uniform` stays, and this fork makes no general claim that
 `trailing` sounds better. Measure your own material before changing it.
 
-Which configuration wins depends on the material and the accelerator, so measure
-before settling on one. `tools/benchmark_samplers.py` degrades a high-quality
-reference, restores it with each configuration, and reports time next to
-log-spectral distance:
-
-```shell
-python tools/benchmark_samplers.py --reference reference.flac \
-  --config ddim:50:1.0:uniform --config ddim:20:0.0:trailing \
-  --config dpmpp2m:20::trailing --config dpmpp2m:30::trailing
-```
-
-Restorations are written to `--output_dir` so the same run can also feed a blind
-listening comparison. The reference must be a genuinely high-quality
-recording. Three numbers are reported per configuration: a per-bin
-log-spectral distance, which judges harmonic material such as solo piano
-cleanly; a fractional-octave envelope distance, which stays meaningful when
-the missing band is noise — fricatives, applause, cymbals — where no
-restoration can match the reference bin by bin; and `quiet_xs`, the dB the
-restoration adds to the reference's own quiet frames, which isolates hiss laid
-over pauses. Each configuration also gets a spectrogram sheet whose last row
-is a signed difference against the reference (red = added beyond the
-reference, blue = missed structure), since a filled-in spectrogram alone reads
-the same whether the content is right or wrong; `--no_spectrograms` skips the
-sheets. The run warns when no configuration beats the degraded input by a
-useful margin on either distance.
+For sampler design, quality metrics, and the developer benchmark harness, see
+[the design document](DESIGN.md#検証境界).
 
 ## Gradio demo
 
@@ -307,7 +267,9 @@ see [Preparing training pairs](docs/training_pairs.md).
 For U-Net LoRA training and applying the resulting adapter, see
 [LoRA training](docs/lora_training.md).
 
-The latent diffusion path operates on latent tensors shaped `[B, 16, 128, 32]` for the default model configuration. Code that integrates with the model should obtain inputs through `get_input(...)` so conditioning and device placement stay consistent with the inference path. Generation starts from noise and never samples the target latent, so the inference path calls it with `return_first_stage_encode=False`; pass `True` only when the encoded target is actually used.
+For architecture and integration details, see [DESIGN.md](DESIGN.md).
+Development checks, including optional ROCm hardware tests, are documented in
+[AGENTS.md](AGENTS.md).
 
 ## Cite our work
 
@@ -322,7 +284,3 @@ If you find this repo useful, please consider citing:
   organization={IEEE}
 }
 ```
-
-# Understanding the Impact of Cutoff Patterns on AudioSR Performance
-
-See the [cutoff-pattern guide](example/how_to_make_audiosr_work.md) for limitations, spectrogram examples, and low-pass preprocessing guidance.

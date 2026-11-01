@@ -306,7 +306,10 @@ orchestraを悪化させた（lsd 1.147→1.575）。orchestraは素のmodelが�
 
 super-resolutionの生成はnoiseから始まり、networkへ入るのは条件latentだけである。対象
 spectrogramのlatentはshapeの参照にしか使われていなかったため、encoder forwardを1回分削る。
-shapeは条件latentから取る。条件側は同一構成のautoencoderが同じ寸法のspectrogramを符号化する
+shapeは条件latentから取る。既定構成のlatent shapeは`[B, 16, 128, 32]`で、
+統合コードは`get_input(...)`を通じて条件とdeviceを揃える。生成では
+`return_first_stage_encode=False`を使い、対象latentを実際に使う経路だけ`True`にする。
+条件側は同一構成のautoencoderが同じ寸法のspectrogramを符号化する
 ので、batch数と時間長は一致する。step数を減らすほど固定costの比率が上がるため、この削減の
 効果はstep数が小さい構成ほど大きい。
 
@@ -335,6 +338,13 @@ memory消費を避ける一方、最初の実モデル構築時にはAudioSR che
 対応Pythonを3.14へ統一し、通常環境のLibrosaは1系を使う。旧Python向けの環境マーカーを
 持たず、`requirements.txt`と`setup.py`の直接依存を同じ単一範囲に保つ。
 
+### accelerator wheelと通常依存を分離する
+
+PyTorch系はOS・accelerator別の公式wheelを先に導入し、通常の依存には固定CUDA indexを
+含めない。`torch>=2.12`、`torchvision>=0.27`、`torchaudio>=2.11`の下限は、
+CPUの新しいwheelだけでなく版番号が異なるROCmの公式組合せも受け入れるためのもの。
+全backendで同じ版番号を要求するより、公式組合せとの互換性を優先する。
+
 ### 配布名とPython APIを分離する
 
 PyPIでは本家の`audiosr`配布物と区別するため`kagayoi-audiosr`として公開する。一方、既存の
@@ -342,6 +352,18 @@ PyPIでは本家の`audiosr`配布物と区別するため`kagayoi-audiosr`と�
 配布名と実行時名が異なる複雑さは生じるが、フォークの識別性と利用者互換性を両立できる。
 
 ## 検証境界
+
+開発用ハーネスの実行例（実checkpointを使用）:
+
+```shell
+python tools/benchmark_samplers.py --reference reference.flac \
+  --config ddim:50:1.0:uniform --config ddim:20:0.0:trailing \
+  --config dpmpp2m:20::trailing --config dpmpp2m:30::trailing
+```
+
+復元音声は`--output_dir`へ保存する。各構成の数値と差分spectrogramは下記の境界で評価し、
+シートが不要なら`--no_spectrograms`を指定する。通常テストと任意のROCm実機検証の
+実行手順は[AGENTS.md](AGENTS.md#必須検証コマンド)を参照する。
 
 単体テストはI/O、実特徴抽出、padding、chunk、shape、seed、引数、checkpoint loader、package
 metadataを検証する。`basic`と`speech`は各約6.18 GBのため、通常テストは生成モデルをmockし、

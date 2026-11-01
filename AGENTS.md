@@ -9,6 +9,8 @@
 - 対応Pythonは3.14以上3.15未満。通常の開発にはPython 3.14を使う。
 - PyTorch、TorchVision、TorchAudioはOS・アクセラレータに合う公式wheelを先に導入する。
   固定したCUDA indexを通常の`requirements.txt`へ追加しない。
+  各パッケージの版番号はbackend間で一致するとは限らないため、公式の組合せを維持し、
+  依存下限の更新で対応accelerator wheelを排除しないことを確認する。
 - 通常環境の直接依存は`requirements.txt`と`setup.py`の`REQUIRED`を同期する。
   テスト依存は`setup.py`の`EXTRAS["test"]`が正本である。
 - PyPI配布名は`kagayoi-audiosr`、Python import名とCLI名は`audiosr`である。
@@ -21,7 +23,8 @@
 
 ## 実装上の不変条件
 
-- 推論の作業・出力サンプルレートは48 kHz。入力は読み込み時に48 kHzへ変換する。
+- 推論の作業・既定出力サンプルレートは48 kHz。入力は特徴抽出前に48 kHzへ変換する。
+  `restore_high_rate` / `--preserve_input_rate`は出力側の任意変換とし、モデルの48 kHz契約を変えない。
 - 公開パイプラインの生成波形は`[batch, channels, samples]`、単一チャンネル処理は
   1次元`[samples]`を基本契約とする。時間軸は常に最後の軸として扱う。
 - モノラル化を暗黙に行わない。CLI、長尺処理、Gradio、保存処理でチャンネル数と順序を保つ。
@@ -60,7 +63,7 @@
 ```powershell
 $env:PYTHONPATH = (Get-Location).Path
 uv run --isolated --no-project --python 3.14 `
-  --with-requirements requirements.txt --with pytest==9.1.1 pytest -q
+  --with-requirements requirements.txt --with "pytest>=9.2.0,<10" pytest -q
 ```
 
 ```powershell
@@ -74,6 +77,24 @@ git diff --check
 `twine check`、wheelの新規環境インストール、`audiosr --help`、sdistの必須ファイルを確認する。
 PyPI公開時は公開ファイルのSHA-256をローカル成果物と照合し、PyPIから新規インストールする。
 生成された`build/`、`dist/`、`*.egg-info/`はコミットしない。
+
+### ROCm実機検証（任意）
+
+通常テストでは`tests/test_rocm_hardware.py`はskipする。対応AMD GPUと公式ROCm wheelの
+ある環境では、kernelと自動device選択を次で確認する。
+
+```powershell
+$env:AUDIOSR_RUN_ROCM_HARDWARE = "1"
+python -m pytest -q tests/test_rocm_hardware.py
+```
+
+実checkpointのdownloadと推論まで検証するときは、追加で
+`$env:AUDIOSR_RUN_ROCM_FULL_INFERENCE = "1"`を指定する。既定は1 stepで、
+`AUDIOSR_ROCM_DDIM_STEPS`で変更できる。約6.18 GBのdownloadと大きなmemoryを要する。
+MIOpenの初回convolution探索が遅い環境では、`$env:MIOPEN_FIND_MODE = "FAST"`で
+即時fallbackを選べるが、GPU性能とのtrade-offがある。
+
+sampler品質測定の境界と開発用ハーネスは[DESIGN.md](DESIGN.md#検証境界)を参照する。
 
 ## 配布ファイル
 
