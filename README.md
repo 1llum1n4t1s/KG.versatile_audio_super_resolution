@@ -12,13 +12,13 @@
 > **This is an independently maintained fork.** Development, issues, and
 > releases are managed here rather than by the upstream project.
 
-[![Version](https://img.shields.io/badge/version-1.0.4-blue.svg?style=flat-square)](CHANGELOG.md)
+[![Version](https://img.shields.io/badge/version-1.0.5-blue.svg?style=flat-square)](CHANGELOG.md)
 [![PyPI](https://img.shields.io/pypi/v/kagayoi-audiosr?style=flat-square)](https://pypi.org/project/kagayoi-audiosr/)
 [![Python](https://img.shields.io/badge/python-3.14-blue.svg?style=flat-square)](setup.py)
 [![arXiv](https://img.shields.io/badge/upstream_arXiv-2309.07314-brightgreen.svg?style=flat-square)](https://arxiv.org/abs/2309.07314)
 [![Upstream samples](https://img.shields.io/badge/upstream-audio_samples-blue?logo=Github&style=flat-square)](https://audioldm.github.io/audiosr)
 
-Current fork release: **1.0.4**. See the [changelog](CHANGELOG.md) for details.
+Current fork release: **1.0.5**. See the [changelog](CHANGELOG.md) for details.
 
 AudioSR restores high-frequency detail from a low-pass audio condition and writes a 48 kHz result. It works with many kinds of audio, including music, speech, and environmental recordings.
 
@@ -82,13 +82,15 @@ Install PyTorch before AudioSR. Select the wheel for the operating system, Pytho
 python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu130
 ```
 
-The selector is the source of truth for CPU, CUDA, and macOS. For AMD GPUs and Ryzen APUs, use the hardware-specific command from the [AMD ROCm PyTorch installer](https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html). For example, the current Windows command for a `gfx1103` Radeon 760M/780M with ROCm 7.14 is:
+The selector is the source of truth for CPU, CUDA, and macOS. For AMD GPUs and Ryzen APUs, use the hardware-specific command from the [AMD ROCm PyTorch installer](https://rocm.docs.amd.com/projects/ai-ecosystem/en/latest/frameworks/pytorch/install.html). For example, the Windows command for a `gfx1103` Radeon 760M/780M using the stable PyTorch 2.13 family with ROCm 10.1 is:
 
 ```shell
-python -m pip install --index-url https://repo.amd.com/rocm/whl-multi-arch/ "torch[device-gfx1103]==2.12.0+rocm7.14.0" "torchvision[device-gfx1103]==0.27.0+rocm7.14.0" "torchaudio==2.11.0+rocm7.14.0"
+python -m pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "torch[device-gfx1103]==2.13.0+rocm10.1.0" "torchvision[device-gfx1103]==0.28.0+rocm10.1.0" "torchaudio==2.11.0.2+rocm10.1.0"
 ```
 
 These commands are examples for the matching platform and may change as PyTorch or ROCm publishes new compatible wheels. Always use the current command from the corresponding official installer.
+
+The dependency ranges accept these accelerator builds as well as newer CPU wheels. Keep the three PyTorch packages from the same official installation command; their release numbers can differ across platforms.
 
 Install this fork from PyPI:
 
@@ -300,6 +302,11 @@ different checkpoint is selected.
 
 ## Developer notes
 
+To create aligned MP3 64/96/128 kbps training pairs from lossless recordings,
+see [Preparing training pairs](docs/training_pairs.md).
+For U-Net LoRA training and applying the resulting adapter, see
+[LoRA training](docs/lora_training.md).
+
 The latent diffusion path operates on latent tensors shaped `[B, 16, 128, 32]` for the default model configuration. Code that integrates with the model should obtain inputs through `get_input(...)` so conditioning and device placement stay consistent with the inference path. Generation starts from noise and never samples the target latent, so the inference path calls it with `return_first_stage_encode=False`; pass `True` only when the encoded target is actually used.
 
 ## Cite our work
@@ -318,38 +325,4 @@ If you find this repo useful, please consider citing:
 
 # Understanding the Impact of Cutoff Patterns on AudioSR Performance
 
-**AudioSR** is a powerful tool for audio super-resolution. However, its performance can be significantly influenced by the characteristics of the input data, especially the cutoff pattern. 
-
-## 🚩 When AudioSR May Fail
-1. **Input Audio with Unfamiliar Cutoff Patterns**  
-   If the input audio file contains a cutoff pattern that is **significantly different** from those used in training, AudioSR may fail to perform effectively.
-   
-2. **Input Audio with Severe Distortions**  
-   Strong distortions such as excessive noise or reverb can degrade the performance of AudioSR.
-
-## ❓ Why Do Cutoff Patterns Have Such a Huge Impact on AudioSR?
-During training, our data was simulated using **low-pass filtering**. The model was not trained to handle other causes of high-frequency loss, such as MP3 compression. As a result, AudioSR struggles when encountering unfamiliar cutoff patterns.
-
-For example, MP3 compression can introduce a cutoff pattern that looks like this:
-
-![MP3 Cutoff Example](example/figs/mp3.png)
-
-### Why This Matters
-As you can see, there are **spectrogram holes** near the cutoff range, which differ significantly from the patterns seen during training. When you apply AudioSR to such data, the output may look like this:
-
-![AudioSR Output on MP3](example/figs/mp3_after.png)
-
-The higher frequencies are not adequately inpainted due to the unfamiliar cutoff pattern.
-
-### A Simple Solution: Low-Pass Filtering
-To mitigate this issue, you can perform a **low-pass filtering** on the audio before feeding it into AudioSR. After low-pass filtering, the audio would resemble a standard low-pass cutoff pattern, like this:
-
-![Low-Pass Filtered Audio](example/figs/lowpass.jpg)
-
-When processed by AudioSR, the output will then be as expected, with improved high-frequency inpainting:
-
-![AudioSR Output on Low-Pass](example/figs/lowpass_after.png)
-
----
-
-By understanding the limitations and addressing them with preprocessing, you can maximize the performance of AudioSR!
+See the [cutoff-pattern guide](example/how_to_make_audiosr_work.md) for limitations, spectrogram examples, and low-pass preprocessing guidance.

@@ -6,6 +6,28 @@ The upstream project history before this fork remains available in the
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-11-02
+
+### Added
+
+- Added aligned MP3 training-pair preparation and U-Net attention LoRA training tools.
+- Added Safetensors LoRA adapter loading through `build_model(lora_path=...)` and `--lora`, with base checkpoint and architecture checks.
+
+### Changed
+
+- Reused restored spectra during optional output calibration and read only the selected span of native 48 kHz benchmark references.
+- Updated dependencies and build tooling while retaining official CPU, CUDA, and ROCm wheel compatibility.
+- Consolidated public export declarations, CLI test setup, and duplicated usage guidance.
+
+### Fixed
+
+- Released failed-batch tensor references before clearing accelerator caches and retrying long-audio chunks after OOM.
+
+### Known limitations
+
+- Pillow 13 security fixes remain unavailable with Gradio 6.31's `Pillow<13` constraint. The incompatible upgrade was not applied.
+
+
 ## [1.0.4] - 2026-09-01
 
 ### Breaking changes

@@ -2,11 +2,13 @@ import importlib.util
 import runpy
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import Mock, call
 
 import pytest
+from packaging.requirements import Requirement
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,19 +71,13 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
     monkeypatch, tmp_path
 ):
     cli = load_cli_module()
-    build_model = Mock(return_value="model")
     read_list = Mock(return_value=["", "  ", "first.wav", "\t", "second.wav"])
     super_resolution_long_audio = Mock(return_value="waveform")
     save_wave = Mock()
 
-    fake_audiosr = ModuleType("audiosr")
-    fake_audiosr.build_model = build_model
-    fake_audiosr.get_time = Mock(return_value="timestamp")
+    fake_audiosr = _fake_audiosr(Mock(), Mock(), save_wave)
+    build_model = fake_audiosr.build_model
     fake_audiosr.read_list = read_list
-    fake_audiosr.restore_high_rate = Mock()
-    fake_audiosr.calibrate_output = Mock()
-    fake_audiosr.save_wave = save_wave
-    fake_audiosr.super_resolution = Mock()
     fake_audiosr.super_resolution_long_audio = super_resolution_long_audio
     fake_torch = SimpleNamespace(set_float32_matmul_precision=Mock())
     monkeypatch.setitem(sys.modules, "audiosr", fake_audiosr)
@@ -155,17 +151,8 @@ def test_main_forwards_chunking_arguments_and_skips_blank_list_entries(
 
 def test_main_forwards_standard_processing_arguments(monkeypatch, tmp_path):
     cli = load_cli_module()
-    build_model = Mock(return_value="model")
     super_resolution = Mock(return_value="waveform")
-    fake_audiosr = ModuleType("audiosr")
-    fake_audiosr.build_model = build_model
-    fake_audiosr.get_time = Mock(return_value="timestamp")
-    fake_audiosr.read_list = Mock()
-    fake_audiosr.restore_high_rate = Mock()
-    fake_audiosr.calibrate_output = Mock()
-    fake_audiosr.save_wave = Mock()
-    fake_audiosr.super_resolution = super_resolution
-    fake_audiosr.super_resolution_long_audio = Mock()
+    fake_audiosr = _fake_audiosr(super_resolution, Mock(), Mock())
     fake_torch = SimpleNamespace(set_float32_matmul_precision=Mock())
     monkeypatch.setitem(sys.modules, "audiosr", fake_audiosr)
     monkeypatch.setitem(sys.modules, "torch", fake_torch)
@@ -217,6 +204,31 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
         if line.strip() and not line.startswith("#")
     }
     assert set(namespace["REQUIRED"]) == requirements
+    torch_requirements = {
+        requirement.name: requirement
+        for requirement in map(Requirement, namespace["REQUIRED"])
+        if requirement.name in {"torch", "torchvision", "torchaudio"}
+    }
+    # 公式CPU/CUDAとREADMEで案内する新旧AMD wheelの互換性を保つ。
+    supported_versions = {
+        "cpu": ("2.15.0", "0.29.2", "2.11.1"),
+        "cuda": ("2.14.1", "0.29.1", "2.11.0"),
+        "amd-current": (
+            "2.14.0+rocm10.1.0",
+            "0.29.0a0+rocm10.1.0",
+            "2.11.0.3",
+        ),
+        "amd-gfx1103": (
+            "2.12.0+rocm7.14.0",
+            "0.27.0+rocm7.14.0",
+            "2.11.0+rocm7.14.0",
+        ),
+    }
+    for platform, versions in supported_versions.items():
+        for name, version in zip(("torch", "torchvision", "torchaudio"), versions):
+            assert torch_requirements[name].specifier.contains(
+                version, prereleases=True
+            ), (platform, name, version)
     assert captured["install_requires"] == namespace["REQUIRED"]
     assert captured["name"] == "kagayoi-audiosr"
     assert captured["python_requires"] == ">=3.14,<3.15"
@@ -225,7 +237,7 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
         for classifier in captured["classifiers"]
         if classifier.startswith("Programming Language :: Python :: 3.")
     ] == ["Programming Language :: Python :: 3.14"]
-    assert captured["version"] == "1.0.4"
+    assert captured["version"] == "1.0.5"
     assert captured["url"] == "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution"
     assert captured["author_email"] == ""
     assert captured["maintainer"] == "Kagayoi"
@@ -235,7 +247,7 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
         "Issues": "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution/issues",
         "Source": "https://github.com/1llum1n4t1s/KG.versatile_audio_super_resolution",
     }
-    assert captured["extras_require"]["test"] == ["pytest>=9.1.1,<10"]
+    assert captured["extras_require"]["test"] == ["pytest>=9.2.0,<10"]
     assert captured["entry_points"] == {
         "console_scripts": ["audiosr=audiosr.__main__:main"]
     }
@@ -244,9 +256,12 @@ def test_setup_metadata_and_requirements_are_synchronized(monkeypatch):
 
 
 def test_build_system_declares_modern_setuptools():
-    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert 'requires = ["setuptools>=84", "wheel>=0.48"]' in pyproject
-    assert 'build-backend = "setuptools.build_meta"' in pyproject
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    assert pyproject["build-system"]["requires"] == [
+        "setuptools>=84.2.1",
+        "wheel>=0.48",
+    ]
+    assert pyproject["build-system"]["build-backend"] == "setuptools.build_meta"
 
 
 def test_module_help_does_not_import_model_pipeline():

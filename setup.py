@@ -27,28 +27,28 @@ AUTHOR = "Haohe Liu"
 MAINTAINER = "Kagayoi"
 MAINTAINER_EMAIL = "contact@kagayoi.com"
 REQUIRES_PYTHON = ">=3.14,<3.15"
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # What packages are required for this module to be executed?
 REQUIRED = [
-    "torch>=2.14",
+    "torch>=2.12",
     "torchaudio>=2.11",
-    "torchvision>=0.29",
+    "torchvision>=0.27",
     "tqdm>=4.70.1",
-    "gradio>=6.29,<7",
+    "gradio>=6.31.0,<7",
     "pyyaml>=6.0.3",
     "einops>=0.8.2",
-    "chardet>=7.6",
-    "numpy>=2.5.3,<3",
+    "chardet>=7.7.0",
+    "numpy>=2.5.4,<3",
     "soundfile>=0.14",
     "librosa>=1,<2",
     "scipy>=1.18.1,<2",
-    "pandas>=3.0.6,<4",
+    "pandas>=3.1.0,<4",
     "unidecode>=1.4",
     "phonemizer>=3.4",
     "torchlibrosa>=0.1",
-    "transformers>=5.17,<6",
-    "huggingface-hub>=1.33,<2",
+    "transformers>=5.22.1,<6",
+    "huggingface-hub>=2.4.0,<3",
     "Pillow>=12.3,<13",
     "requests>=2.34.2,<3",
     "scikit-learn>=1.9.1,<2",
@@ -62,7 +62,7 @@ REQUIRED = [
 
 # What packages are optional?
 EXTRAS = {
-    "test": ["pytest>=9.1.1,<10"],
+    "test": ["pytest>=9.2.0,<10"],
 }
 
 # The rest you shouldn't have to touch too much :)
@@ -80,20 +80,10 @@ try:
 except FileNotFoundError:
     long_description = DESCRIPTION
 
-# Load the package's __version__.py module as a dictionary.
-about = {}
-if not VERSION:
-    project_slug = NAME.lower().replace("-", "_").replace(" ", "_")
-    with open(os.path.join(here, project_slug, "__version__.py")) as f:
-        exec(f.read(), about)
-else:
-    about["__version__"] = VERSION
-
-
 # Where the magic happens:
 setup(
     name=NAME,
-    version=about["__version__"],
+    version=VERSION,
     description=DESCRIPTION,
     long_description=long_description,
     long_description_content_type="text/markdown",
