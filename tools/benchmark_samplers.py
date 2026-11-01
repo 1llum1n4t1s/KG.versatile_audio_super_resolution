@@ -171,7 +171,20 @@ def load_reference(path, offset_s, duration_s):
     import torch
     import torchaudio
 
-    waveform, sample_rate = sf.read(os.fspath(path), dtype="float32", always_2d=True)
+    start = int(round(offset_s * _SAMPLE_RATE))
+    with sf.SoundFile(os.fspath(path)) as source:
+        sample_rate = source.samplerate
+        if sample_rate == _SAMPLE_RATE:
+            if start >= source.frames:
+                raise SystemExit("--offset_s starts past the end of the reference")
+            start = slice(start, None).indices(source.frames)[0]
+            frames = source.frames - start
+            if duration_s > 0:
+                frames = min(frames, int(round(duration_s * _SAMPLE_RATE)))
+            source.seek(start)
+            waveform = source.read(frames, dtype="float32", always_2d=True)
+        else:
+            waveform = source.read(dtype="float32", always_2d=True)
     waveform = torch.from_numpy(np.ascontiguousarray(waveform.T))
     # A single channel keeps the comparison about the sampler rather than about
     # how channels are blended.
@@ -181,13 +194,11 @@ def load_reference(path, offset_s, duration_s):
         waveform = torchaudio.functional.resample(
             waveform, orig_freq=sample_rate, new_freq=_SAMPLE_RATE
         )
-
-    start = int(round(offset_s * _SAMPLE_RATE))
-    if start >= waveform.shape[-1]:
-        raise SystemExit("--offset_s starts past the end of the reference")
-    waveform = waveform[:, start:]
-    if duration_s > 0:
-        waveform = waveform[:, : int(round(duration_s * _SAMPLE_RATE))]
+        if start >= waveform.shape[-1]:
+            raise SystemExit("--offset_s starts past the end of the reference")
+        waveform = waveform[:, start:]
+        if duration_s > 0:
+            waveform = waveform[:, : int(round(duration_s * _SAMPLE_RATE))]
     if waveform.shape[-1] < _SAMPLE_RATE:
         raise SystemExit("the selected reference span is shorter than one second")
     return waveform.contiguous()

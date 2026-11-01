@@ -75,7 +75,11 @@ def _spectrum(waveform):
 
 def band_envelope(waveform, edges):
     """Return per-band log10 power over time, shape ``[bands, frames]``."""
-    power = _spectrum(waveform).abs() ** 2
+    return _envelope_from_spectrum(_spectrum(waveform), edges)
+
+
+def _envelope_from_spectrum(spectrum, edges):
+    power = spectrum.abs() ** 2
     bands = torch.stack(
         [power[start:stop].mean(dim=0) for start, stop in zip(edges, edges[1:])]
     )
@@ -221,6 +225,10 @@ def _band_gains(model, restored, source, edges):
     """Return per-band gains in dB, zeroed at and below the source's cutoff."""
     source_envelope = band_envelope(source, edges)
     restored_envelope = band_envelope(restored, edges)
+    return _gains_from_envelopes(model, restored_envelope, source_envelope, edges)
+
+
+def _gains_from_envelopes(model, restored_envelope, source_envelope, edges):
     frames = min(source_envelope.shape[-1], restored_envelope.shape[-1])
     source_envelope = source_envelope[:, :frames]
     restored_envelope = restored_envelope[:, :frames]
@@ -290,8 +298,10 @@ def apply_calibration(restored, source, model):
     outputs = []
     for channel in range(restored.size(0)):
         spectrum = _spectrum(restored[channel])
-        gains_db, _cutoff = _band_gains(
-            model, restored[channel], source[channel], edges
+        source_envelope = band_envelope(source[channel], edges)
+        restored_envelope = _envelope_from_spectrum(spectrum, edges)
+        gains_db, _cutoff = _gains_from_envelopes(
+            model, restored_envelope, source_envelope, edges
         )
         frames = min(spectrum.shape[-1], gains_db.shape[-1])
         gain = 10.0 ** (

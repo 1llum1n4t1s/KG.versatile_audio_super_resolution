@@ -225,6 +225,63 @@ def test_reference_loading_rejects_a_span_shorter_than_one_second(tool, tmp_path
         tool.load_reference(path, offset_s=10.0, duration_s=0.0)
 
 
+@pytest.mark.parametrize(
+    "offset_s,duration_s",
+    [
+        (0.5, 1.25),
+        (0.50001, 1.00001),
+        (-1.5, 1.0),
+        (-10.0, 1.0),
+        (1.0, 0.0),
+        (1.0, -1.0),
+        (2.0, 10.0),
+        (2.5, 0.0),
+        (0.5, 0.25),
+        (3.0, 0.0),
+        (4.0, 1.0),
+    ],
+)
+def test_reference_loading_reads_only_the_selected_48khz_span(
+    tool, tmp_path, monkeypatch, offset_s, duration_s
+):
+    path = tmp_path / "reference.wav"
+    stereo = np.stack(
+        [
+            np.linspace(-0.5, 0.5, 144000, dtype=np.float32),
+            np.linspace(0.25, -0.125, 144000, dtype=np.float32),
+        ],
+        axis=-1,
+    )
+    sf.write(path, stereo, samplerate=48000, subtype="FLOAT")
+    start = round(offset_s * 48000)
+    selected = stereo[start:]
+    if duration_s > 0:
+        selected = selected[: round(duration_s * 48000)]
+    reads = []
+    original_read = sf.SoundFile.read
+
+    def track_read(source, frames=-1, **kwargs):
+        reads.append((source.tell(), frames))
+        return original_read(source, frames=frames, **kwargs)
+
+    monkeypatch.setattr(sf.SoundFile, "read", track_read)
+    if start >= len(stereo):
+        with pytest.raises(SystemExit, match="starts past the end"):
+            tool.load_reference(path, offset_s, duration_s)
+        assert reads == []
+    else:
+        if len(selected) < 48000:
+            with pytest.raises(SystemExit, match="shorter than one second"):
+                tool.load_reference(path, offset_s, duration_s)
+        else:
+            loaded = tool.load_reference(path, offset_s, duration_s)
+            expected = torch.from_numpy(selected.T.copy()).mean(dim=0, keepdim=True)
+            torch.testing.assert_close(loaded, expected, rtol=0, atol=0)
+            assert loaded.dtype == torch.float32
+            assert loaded.is_contiguous()
+        assert reads == [(slice(start, None).indices(len(stereo))[0], len(selected))]
+
+
 def test_a_hairs_width_win_does_not_count_as_a_result(tool):
     """Beating the degraded input by 0.03% is a tie, not a ranking.
 

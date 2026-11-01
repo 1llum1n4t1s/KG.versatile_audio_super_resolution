@@ -430,6 +430,8 @@ def test_long_audio_batches_chunks_without_reducing_ddim_steps(monkeypatch):
 
 
 def test_long_audio_batch_retries_single_chunks_after_accelerator_oom(monkeypatch):
+    import weakref
+
     source = torch.arange(8, dtype=torch.float32).unsqueeze(0)
     monkeypatch.setattr(
         pipeline, "load_audio", lambda *_args, **_kwargs: (source, 48000)
@@ -452,13 +454,29 @@ def test_long_audio_batch_retries_single_chunks_after_accelerator_oom(monkeypatc
 
     monkeypatch.setattr(pipeline, "_prepare_mono_batch", fake_prepare)
     batch_sizes = []
+    failed_tensor_refs = []
+    release_checks = []
+
+    def assert_failed_tensors_released(stage):
+        assert failed_tensor_refs
+        assert all(reference() is None for reference in failed_tensor_refs)
+        release_checks.append(stage)
+
+    monkeypatch.setattr(
+        pipeline,
+        "_clear_accelerator_cache",
+        lambda: assert_failed_tensors_released("cache_clear"),
+    )
 
     class OomModel:
         def generate_batch(self, batch, **_kwargs):
             current_batch_size = batch["waveform"].shape[0]
             batch_sizes.append(current_batch_size)
             if current_batch_size > 1:
+                failed_tensor = torch.ones(1)
+                failed_tensor_refs.append(weakref.ref(failed_tensor))
                 raise RuntimeError("CUDA out of memory")
+            assert_failed_tensors_released("single_retry")
             return batch["waveform"]
 
     result = pipeline.super_resolution_long_audio(
@@ -473,6 +491,7 @@ def test_long_audio_batch_retries_single_chunks_after_accelerator_oom(monkeypatc
     assert result.shape == (1, 1, 8)
     assert torch.isfinite(result).all()
     assert batch_sizes == [2, 1, 1]
+    assert release_checks == ["cache_clear", "single_retry", "single_retry"]
 
 
 @pytest.mark.parametrize("batch_size", [0, 9, 1.5])

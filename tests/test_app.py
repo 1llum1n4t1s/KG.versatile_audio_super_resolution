@@ -28,14 +28,6 @@ def _load_app(monkeypatch):
     fake_gradio.Slider = _FakeComponent
     fake_gradio.Number = _FakeComponent
 
-    fake_librosa = types.ModuleType("librosa")
-    fake_librosa.feature = types.SimpleNamespace(
-        rms=lambda y, frame_length, hop_length: np.ones(
-            (1, max(1, int(np.ceil(len(y) / hop_length))),), dtype=np.float32
-        )
-    )
-    fake_librosa.amplitude_to_db = lambda values, ref: np.zeros_like(values)
-
     def fake_batch(
         model,
         chunks,
@@ -69,7 +61,6 @@ def _load_app(monkeypatch):
     fake_audiosr.pipeline = fake_pipeline
 
     monkeypatch.setitem(sys.modules, "gradio", fake_gradio)
-    monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
     monkeypatch.setitem(sys.modules, "audiosr", fake_audiosr)
     monkeypatch.setitem(sys.modules, "audiosr.pipeline", fake_pipeline)
     sys.modules.pop("app", None)
@@ -78,11 +69,11 @@ def _load_app(monkeypatch):
         np.ones((1, 8), dtype=np.float32),
         48000,
     )
-    return app, fake_librosa, calls, fake_gradio
+    return app, calls, fake_gradio
 
 
 def test_import_does_not_launch_and_interface_keeps_batch_controls(monkeypatch):
-    app, _librosa, _calls, fake_gradio = _load_app(monkeypatch)
+    app, _calls, fake_gradio = _load_app(monkeypatch)
 
     assert fake_gradio.Interface.launch_count == 0
     interface = app.create_interface()
@@ -112,7 +103,7 @@ def test_import_does_not_launch_and_interface_keeps_batch_controls(monkeypatch):
 
 
 def test_normalize_audio_preserves_level_unless_peak_exceeds_one(monkeypatch):
-    app, _librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    app, _calls, _fake_gradio = _load_app(monkeypatch)
     quiet = np.array([-0.25, 0.5], dtype=np.float32)
     loud = np.array([-2.0, 1.0], dtype=np.float32)
 
@@ -123,7 +114,7 @@ def test_normalize_audio_preserves_level_unless_peak_exceeds_one(monkeypatch):
 
 
 def test_release_cached_model_clears_mps_cache(monkeypatch):
-    app, _librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    app, _calls, _fake_gradio = _load_app(monkeypatch)
     cache_calls = []
     fake_torch = types.SimpleNamespace(
         cuda=types.SimpleNamespace(is_available=lambda: False, empty_cache=lambda: None),
@@ -142,7 +133,7 @@ def test_release_cached_model_clears_mps_cache(monkeypatch):
 
 
 def test_process_audio_channel_groups_batches_and_preserves_order(monkeypatch):
-    app, _librosa, calls, _fake_gradio = _load_app(monkeypatch)
+    app, calls, _fake_gradio = _load_app(monkeypatch)
     source = np.arange(120, dtype=np.float32)
 
     output = app.process_audio_channel(
@@ -157,7 +148,7 @@ def test_process_audio_channel_groups_batches_and_preserves_order(monkeypatch):
 
 
 def test_chunk_reaching_eof_is_not_followed_by_contained_tail(monkeypatch):
-    app, _librosa, calls, _fake_gradio = _load_app(monkeypatch)
+    app, calls, _fake_gradio = _load_app(monkeypatch)
     source = np.ones(470, dtype=np.float32)
 
     output = app.process_audio_channel(
@@ -171,7 +162,7 @@ def test_chunk_reaching_eof_is_not_followed_by_contained_tail(monkeypatch):
 
 
 def test_process_chunk_flattens_legacy_batch_axis_and_trims(monkeypatch):
-    app, _librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    app, _calls, _fake_gradio = _load_app(monkeypatch)
     app.super_resolution_batch = lambda *_args: [
         np.ones((1, 32), dtype=np.float32)
     ]
@@ -191,7 +182,7 @@ def test_process_chunk_flattens_legacy_batch_axis_and_trims(monkeypatch):
 
 
 def test_inference_uses_canonical_loader_and_preserves_channel_shapes(monkeypatch):
-    app, _fake_librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    app, _calls, _fake_gradio = _load_app(monkeypatch)
     load_calls = []
 
     def load_mono(path, target_sample_rate=None):
@@ -215,7 +206,7 @@ def test_inference_uses_canonical_loader_and_preserves_channel_shapes(monkeypatc
 
 
 def test_inference_reuses_model_until_model_name_changes(monkeypatch):
-    app, _fake_librosa, _calls, _fake_gradio = _load_app(monkeypatch)
+    app, _calls, _fake_gradio = _load_app(monkeypatch)
     fake_audiosr = sys.modules["audiosr"]
 
     app.inference("first.wav", "basic", 2.6, 50, 1, 7)
@@ -226,7 +217,7 @@ def test_inference_reuses_model_until_model_name_changes(monkeypatch):
 
 
 def test_process_audio_channel_uses_distinct_reproducible_batch_seeds(monkeypatch):
-    app, _fake_librosa, calls, _fake_gradio = _load_app(monkeypatch)
+    app, calls, _fake_gradio = _load_app(monkeypatch)
 
     app.process_audio_channel(
         object(),

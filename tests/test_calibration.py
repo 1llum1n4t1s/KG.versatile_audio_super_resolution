@@ -136,17 +136,34 @@ def test_gains_are_clamped_and_leave_the_source_band_alone():
     assert float(gains_db[cutoff + 1 :].mean()) < 0.0
 
 
-def test_apply_calibration_attenuates_hallucinated_content():
+def test_apply_calibration_attenuates_hallucinated_content(monkeypatch):
     """A silent source must pull generated top-end energy down."""
     edges = calibration.band_edges()
     bands = len(edges) - 1
-    restored = (_tone(1000) + _tone(12000, amplitude=0.2)).reshape(1, -1)
-    source = _tone(1000).reshape(1, -1)
+    restored = torch.stack([
+        _tone(1000) + _tone(12000, amplitude=0.2),
+        _tone(2000) + _tone(14000, amplitude=0.1),
+    ])
+    source = torch.stack([_tone(1000), _tone(2000)])
+
+    spectrum_inputs = []
+    original_spectrum = calibration._spectrum
+
+    def track_spectrum(waveform):
+        spectrum_inputs.append(waveform)
+        return original_spectrum(waveform)
+
+    monkeypatch.setattr(calibration, "_spectrum", track_spectrum)
 
     model = _FixedPrediction(bands, level=-30.0)
     calibrated = calibration.apply_calibration(restored, source, model)
 
     assert calibrated.shape == restored.shape
+    assert calibrated.dtype == restored.dtype
+    assert len(spectrum_inputs) == 2 * restored.shape[0]
+    for channel in range(restored.shape[0]):
+        assert torch.equal(spectrum_inputs[2 * channel], restored[channel])
+        assert torch.equal(spectrum_inputs[2 * channel + 1], source[channel])
 
     def band_energy(waveform, low_hz, high_hz):
         spectrum = torch.fft.rfft(waveform[0].double())
