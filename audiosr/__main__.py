@@ -75,6 +75,10 @@ def build_parser():
         default="basic",
         choices=["basic", "speech"],
     )
+    parser.add_argument("--lora", type=str, default=None,
+                        help="Codec-restoration LoRA .safetensors adapter for this base model.")
+    parser.add_argument("--ckpt-path", type=str, default=None, help="Local base checkpoint.")
+    parser.add_argument("--config", type=str, default=None, help="Model configuration YAML for the base checkpoint.")
     parser.add_argument(
         "-d",
         "--device",
@@ -217,7 +221,12 @@ def main(argv=None):
     if not files_todo:
         build_parser().error("input file list does not contain any paths")
 
-    audiosr = build_model(model_name=args.model_name, device=args.device)
+    model_options = {"lora_path": args.lora} if args.lora is not None else {}
+    if args.ckpt_path is not None:
+        model_options["ckpt_path"] = args.ckpt_path
+    if args.config is not None:
+        model_options["config"] = args.config
+    audiosr = build_model(model_name=args.model_name, device=args.device, **model_options)
 
     for input_file in files_todo:
         if args.chunking:

@@ -1,5 +1,7 @@
 import os
 import re
+import hashlib
+import json
 from collections.abc import Mapping
 
 import yaml
@@ -107,6 +109,7 @@ def _prepare_mono_batch(
     padded_samples,
     add_batch_dimension=True,
     lowpass_filter_type=None,
+    codec_mode=False,
 ):
     """Build model features for one normalized mono waveform.
 
@@ -135,6 +138,14 @@ def _prepare_mono_batch(
         "log_mel_spec": torch.as_tensor(log_mel_spec, dtype=torch.float32),
         "sampling_rate": _SAMPLE_RATE,
     }
+    if codec_mode:
+        batch["waveform_lowpass"] = batch["waveform"]
+        batch["lowpass_mel"] = batch["log_mel_spec"]
+        if add_batch_dimension:
+            for key, value in list(batch.items()):
+                if isinstance(value, torch.Tensor):
+                    batch[key] = value.float().unsqueeze(0)
+        return batch, duration
     batch.update(
         lowpass_filtering_prepare_inference(
             batch, filter_type=lowpass_filter_type
@@ -159,6 +170,7 @@ def make_batch_for_super_resolution(
     waveform=None,
     fbank=None,
     lowpass_filter_type=None,
+    codec_mode=False,
 ):
     if waveform is None:
         log_mel_spec, stft, waveform, duration, target_frame = read_audio_file(input_file)
@@ -168,6 +180,13 @@ def make_batch_for_super_resolution(
             "log_mel_spec": torch.as_tensor(log_mel_spec, dtype=torch.float32),
             "sampling_rate": _SAMPLE_RATE,
         }
+        if codec_mode:
+            batch["waveform_lowpass"] = batch["waveform"]
+            batch["lowpass_mel"] = batch["log_mel_spec"]
+            for key, value in list(batch.items()):
+                if isinstance(value, torch.Tensor):
+                    batch[key] = value.float().unsqueeze(0)
+            return batch, duration
         batch.update(
             lowpass_filtering_prepare_inference(
                 batch, filter_type=lowpass_filter_type
@@ -189,6 +208,7 @@ def make_batch_for_super_resolution(
         padded_samples,
         add_batch_dimension=True,
         lowpass_filter_type=lowpass_filter_type,
+        codec_mode=codec_mode,
     )
 
 
@@ -262,7 +282,13 @@ def duplicated_first_stage_cond(config, state_dict):
     return tuple(shared), tuple(redundant)
 
 
-def build_model(ckpt_path=None, config=None, device=None, model_name="basic"):
+def build_model(ckpt_path=None, config=None, device=None, model_name="basic",
+                lora_path=None, record_base_identity=False):
+    if lora_path is not None:
+        if not os.fspath(lora_path).lower().endswith(".safetensors"):
+            raise ValueError("LoRA adapters must use .safetensors")
+        if not os.path.isfile(lora_path):
+            raise FileNotFoundError(lora_path)
     if device is None or device == "auto":
         if torch.cuda.is_available():
             device = torch.device("cuda:0")
@@ -287,6 +313,21 @@ def build_model(ckpt_path=None, config=None, device=None, model_name="basic"):
     else:
         config = default_audioldm_config(model_name)
 
+    base_metadata = None
+    if record_base_identity or lora_path is not None:
+        digest = hashlib.sha256()
+        with open(ckpt_path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(8 * 1024 * 1024), b""):
+                digest.update(chunk)
+        base_metadata = {
+            "model_name": model_name,
+            "checkpoint_sha256": digest.hexdigest(),
+            "config_sha256": hashlib.sha256(json.dumps(
+                config, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ).encode("utf-8")).hexdigest(),
+        }
+        # 既存EMAは後付けLoRAを追跡しない。学習・適用とも実パラメーターを使う。
+        config["model"]["params"]["use_ema"] = False
     # # Use text as condition instead of using waveform during training
     config["model"]["params"]["device"] = device
     # config["model"]["params"]["cond_stage_key"] = "text"
@@ -301,10 +342,27 @@ def build_model(ckpt_path=None, config=None, device=None, model_name="basic"):
 
     # No normalization here
     latent_diffusion = LatentDiffusion(**config["model"]["params"])
-    latent_diffusion.load_state_dict(state_dict, strict=False)
+    incompatible = latent_diffusion.load_state_dict(state_dict, strict=False)
+    if base_metadata is not None:
+        missing = [key for key in incompatible.missing_keys if key not in redundant and key.startswith(
+            ("model.diffusion_model.", "first_stage_model.", "cond_stage_models.")
+        )]
+        if missing:
+            raise ValueError(f"Base checkpoint is incomplete for LoRA: {missing[:5]}")
 
     latent_diffusion.eval()
     latent_diffusion = latent_diffusion.to(device)
+
+    if base_metadata is not None:
+        latent_diffusion._audiosr_base_metadata = base_metadata
+    if lora_path is not None:
+        from audiosr.lora import load_lora
+
+        metadata = load_lora(latent_diffusion, lora_path)
+        if metadata.get("conditioning_mode") != "codec":
+            raise ValueError("This pipeline requires a codec-conditioning LoRA adapter")
+        latent_diffusion._audiosr_codec_lora = True
+        latent_diffusion.eval()
 
     return latent_diffusion
 
@@ -407,23 +465,24 @@ def _generate_long_audio_batch(
         if len(chunks) <= 1 or not _is_accelerator_out_of_memory(error):
             raise
 
-        _clear_accelerator_cache()
-        generated = []
-        for offset, chunk in enumerate(chunks):
-            generated.extend(
-                super_resolution_batch(
-                    latent_diffusion,
-                    [chunk],
-                    seed=int(seed) + offset,
-                    lowpass_seed=lowpass_seed,
-                    ddim_steps=ddim_steps,
-                    guidance_scale=guidance_scale,
-                    sampler=sampler,
-                    ddim_eta=ddim_eta,
-                    discretize=discretize,
-                )
+    # 例外のtracebackが保持する失敗フレームとtensorを解放してから再試行する。
+    _clear_accelerator_cache()
+    generated = []
+    for offset, chunk in enumerate(chunks):
+        generated.extend(
+            super_resolution_batch(
+                latent_diffusion,
+                [chunk],
+                seed=int(seed) + offset,
+                lowpass_seed=lowpass_seed,
+                ddim_steps=ddim_steps,
+                guidance_scale=guidance_scale,
+                sampler=sampler,
+                ddim_eta=ddim_eta,
+                discretize=discretize,
             )
-        return generated
+        )
+    return generated
 
 
 def _blend_long_audio_chunk(
@@ -645,7 +704,8 @@ def super_resolution(
         # same stochastic path while retaining the existing mono model path.
         seed_everything(int(seed))
         batch, duration = make_batch_for_super_resolution(
-            None, waveform=channel.detach().cpu().numpy()
+            None, waveform=channel.detach().cpu().numpy(),
+            **({"codec_mode": True} if getattr(latent_diffusion, "_audiosr_codec_lora", False) is True else {}),
         )
         with torch.inference_mode():
             generated = latent_diffusion.generate_batch(
@@ -740,6 +800,7 @@ def super_resolution_long_audio(
                     None,
                     waveform=chunk.detach().cpu().numpy(),
                     lowpass_filter_type=lowpass_filter_type,
+                    **({"codec_mode": True} if getattr(latent_diffusion, "_audiosr_codec_lora", False) is True else {}),
                 )
                 with torch.inference_mode():
                     generated = latent_diffusion.generate_batch(
@@ -831,6 +892,7 @@ def super_resolution_batch(
             padded_samples,
             add_batch_dimension=False,
             lowpass_filter_type=lowpass_filter_type,
+            **({"codec_mode": True} if getattr(latent_diffusion, "_audiosr_codec_lora", False) is True else {}),
         )[0]
         for waveform in prepared
     ]

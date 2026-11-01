@@ -29,6 +29,38 @@
 | `app.py` | Gradio UI、単一モデルcache、チャンネル別chunk batch、crossfade、UI用変換を担う。 |
 | `tests/` | 大容量checkpointを使わず、公開契約、shape、境界、package設定を検証する。 |
 | `tools/benchmark_samplers.py` | 実checkpointでsampler構成ごとの所要時間と再構成品質を測る開発用ハーネス。 |
+| `tools/prepare_training_pairs.py` | 原音から48 kHz正解PCMとMP3 64/96/128 kbpsの復号PCMを生成・検査し、録音単位のsplit付きmanifestを出力する。 |
+
+## 圧縮修復の学習ペア準備
+
+開発用の独立スクリプトとして、SoundFileでlossless原音を読み、必要時だけTorchaudioで
+48 kHzへ変換する。mono/stereoを保持し、MP3非対応の多チャンネルは暗黙downmixせず拒否する。
+全bitrateの正解は同じfloat32 PCMとし、codec入力のpeak調整は共通gainで記録する。
+FFmpegのlibmp3lameで全録音をCBR圧縮し、seek可能なMP3のXing/LAME情報を使って復号する。
+通常推論のI/O経路へFFmpegや一時WAVを追加しない。
+
+復号後のrate・shape・有限値と、非無音区間の相互相関によるzero lagを検査する。
+長さ違いのtrim/padや時間ずれの推測補正はせず、失敗時はdatasetをfailedにする。
+正解PCMのSHA-256からrecording IDとseed付きsplitを決め、全bitrateへ継承する。
+同一PCMの重複は除外するが、別編集・別masterの同一曲判定は行わない。
+`manifest.jsonl`は全ペア検査後に生成し、利用時は`dataset.json`のcomplete状態を要求する。
+既存の包絡較正trainerとはデータ契約が異なる。
+操作方法とmanifest項目は[学習ペア準備](docs/training_pairs.md)を参照する。
+
+## U-Net LoRAによる圧縮修復の追加学習
+
+`tools/train_lora.py`は完了済みペアmanifestからtrain/validationを読み、録音splitを保持した
+5.12秒窓・チャンネル別の例を生成する。testは学習・選択に使わない。条件音から決めた
+同一offset/gainを正解にも適用し、正解melをVAEでencode、圧縮音melを条件にして既存の
+v予測損失を学習する。U-NetのCrossAttentionのq/k/v/outだけに`audiosr/lora.py`で
+LoRAを注入し、元のU-Net・VAE・条件encoder・vocoderはfreezeする。既存EMAは利用しない。
+
+アダプターは差分tensorとmetadataを単独Safetensorsへ保存する。base checkpoint全体と
+設定のSHA-256、U-Net構造、対象層、shapeを照合してから読み込み、二重適用を拒否する。
+`build_model(lora_path=...)`とCLIの`--lora`は圧縮修復modeを有効にし、条件への追加lowpassと
+生成後のmel/低域差し戻しを行わない。通常モデルの経路はこのmodeへ入らない。
+モデル全体の再保存、optimizerのresume、mixed precisionは対象外とする。
+手順と制約は[LoRA学習](docs/lora_training.md)を参照する。
 
 ## 標準推論データフロー
 

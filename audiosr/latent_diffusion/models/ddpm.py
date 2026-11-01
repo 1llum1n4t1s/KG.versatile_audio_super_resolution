@@ -1599,15 +1599,17 @@ class LatentDiffusion(DDPM):
 
         mel = self.decode_first_stage(samples)
 
-        lowpass_mel = super().get_input(batch, "lowpass_mel")
-        mel = self.mel_replace_ops(mel, lowpass_mel)
+        if getattr(self, "_audiosr_codec_lora", False) is not True:
+            lowpass_mel = super().get_input(batch, "lowpass_mel")
+            mel = self.mel_replace_ops(mel, lowpass_mel)
 
         waveform = self.mel_spectrogram_to_waveform(
             mel, savepath="", bs=None, save=False
         )
 
-        waveform_lowpass = super().get_input(batch, "waveform_lowpass")
-        waveform = self.postprocessing(waveform, waveform_lowpass)
+        if getattr(self, "_audiosr_codec_lora", False) is not True:
+            waveform_lowpass = super().get_input(batch, "waveform_lowpass")
+            waveform = self.postprocessing(waveform, waveform_lowpass)
 
         waveform = torch.nan_to_num(waveform, nan=0.0, posinf=1.0, neginf=-1.0)
         max_amp = waveform.abs().amax(dim=-1, keepdim=True).clamp_min(1e-8)

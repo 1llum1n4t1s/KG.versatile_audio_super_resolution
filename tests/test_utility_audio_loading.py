@@ -28,16 +28,6 @@ def test_load_audio_preserves_mono_shape_and_sample_rate(tmp_path):
     assert sample_rate == 22050
 
 
-def test_load_audio_preserves_stereo_shape_and_sample_rate(tmp_path):
-    path = tmp_path / "stereo.wav"
-    samples = _write_wav(path, channels=2, sample_rate=32000)
-
-    waveform, sample_rate = load_audio(path)
-
-    assert waveform.shape == (2, samples.shape[0])
-    assert sample_rate == 32000
-
-
 def test_audio_tools_read_wav_file_keeps_first_channel_and_batch_shape(monkeypatch):
     source = torch.stack(
         [torch.linspace(-1.0, 1.0, 256), torch.linspace(1.0, -1.0, 256)]

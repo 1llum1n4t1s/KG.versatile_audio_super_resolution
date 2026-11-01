@@ -1,3 +1,5 @@
 include *.py LICENSE README.md CHANGELOG.md requirements.txt visualization.png
 recursive-include example *.md *.py *.png *.jpg *.pdf
 recursive-include audiosr *.py *.gz *.npy *.json *.pt LICENSE
+recursive-include tools *.py
+recursive-include docs *.md
