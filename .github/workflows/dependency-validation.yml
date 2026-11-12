@@ -11,8 +11,8 @@ permissions:
   contents: "read"
 jobs:
   python:
-    if: ${{ (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && (github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login == 'dependabot[bot]') }}
-    runs-on: [self-hosted, Linux, X64, m3mb14]
+    if: "github.event_name == 'workflow_dispatch' || github.event.pull_request.user.login == 'dependabot[bot]'"
+    runs-on: "ubuntu-latest"
     timeout-minutes: 45
     env:
       PYTHONPATH: "."
